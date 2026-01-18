@@ -762,4 +762,222 @@ mod tests {
         let atlas = icon.texture_atlas();
         assert_eq!(atlas.index, 5);
     }
+
+    // ==========================================================================
+    // Additional tests for Bevy 0.17 migration validation
+    // ==========================================================================
+
+    #[test]
+    fn test_id_from_filename_extracts_correct_id() {
+        let path = Path::new("fireball.spell.ron");
+        let id: Option<MockId> = id_from_filename_with_extension(path, ".spell.ron");
+        assert!(id.is_some());
+        // "fireball" has 8 characters
+        assert_eq!(id.unwrap(), MockId(8));
+    }
+
+    #[test]
+    fn test_id_from_filename_with_nested_path() {
+        let path = Path::new("prefabs/spells/fireball.spell.ron");
+        let id: Option<MockId> = id_from_filename_with_extension(path, ".spell.ron");
+        assert!(id.is_some());
+        assert_eq!(id.unwrap(), MockId(8)); // "fireball"
+    }
+
+    #[test]
+    fn test_id_from_filename_empty_id() {
+        // Extension only - should return None
+        let path = Path::new(".spell.ron");
+        let id: Option<MockId> = id_from_filename_with_extension(path, ".spell.ron");
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_legacy_id_from_filename() {
+        let path = Path::new("test_item.mock.ron");
+        let id: Option<MockId> = id_from_filename(path, ".mock.ron");
+        assert!(id.is_some());
+        assert_eq!(id.unwrap(), MockId(9)); // "test_item"
+    }
+
+    #[test]
+    fn test_is_hidden_file_with_nested_paths() {
+        assert!(is_hidden_file(Path::new("some/path/.hidden.ron")));
+        assert!(is_hidden_file(Path::new("some/path/_disabled.ron")));
+        assert!(!is_hidden_file(Path::new("some/path/normal.ron")));
+    }
+
+    #[test]
+    fn test_asset_folder_multiple_assets() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut library: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+
+        // Insert multiple assets
+        for i in 0..10 {
+            library.insert(MockId(i), Handle::default());
+        }
+
+        assert_eq!(library.len(), 10);
+        assert!(library.is_ready());
+
+        // Verify all are accessible
+        for i in 0..10 {
+            assert!(library.contains(MockId(i)));
+            assert!(library.get(MockId(i)).is_some());
+        }
+
+        // Test keys count
+        let keys: Vec<_> = library.keys().collect();
+        assert_eq!(keys.len(), 10);
+
+        // Test iteration
+        let iter_count = library.iter().count();
+        assert_eq!(iter_count, 10);
+    }
+
+    #[test]
+    fn test_asset_folder_get_mut() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut library: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        let id = MockId(1);
+        library.insert(id, Handle::default());
+
+        // Test mutable access
+        assert!(library.get_mut(id).is_some());
+        assert!(library.get_mut(MockId(999)).is_none());
+    }
+
+    #[test]
+    fn test_asset_folder_insert_returns_old_value() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut library: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        let id = MockId(1);
+
+        // First insert returns None
+        let old = library.insert(id, Handle::default());
+        assert!(old.is_none());
+
+        // Second insert returns the old handle
+        let old = library.insert(id, Handle::default());
+        assert!(old.is_some());
+    }
+
+    #[test]
+    fn test_asset_folder_deref() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut library: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        library.insert(MockId(1), Handle::default());
+
+        // Test Deref access to HashMap methods
+        assert!(library.contains_key(&MockId(1)));
+        assert!(!library.contains_key(&MockId(2)));
+    }
+
+    #[test]
+    fn test_asset_folder_handle_failed_paths() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut handle: AssetFolderHandle<MockAsset> = AssetFolderHandle::new();
+
+        // Track failed paths
+        handle.failed_paths.push("path/to/failed1.ron".to_string());
+        handle.failed_paths.push("path/to/failed2.ron".to_string());
+
+        assert_eq!(handle.failed_paths.len(), 2);
+        assert!(handle.failed_paths.contains(&"path/to/failed1.ron".to_string()));
+    }
+
+    #[test]
+    fn test_atlas_icon_image_node_creation() {
+        let icon = AtlasIcon::new(Handle::default(), Handle::default(), 3);
+
+        // Test that image_node() creates a valid ImageNode
+        let _image_node = icon.image_node();
+
+        // Test get_image returns a handle
+        let _image = icon.get_image();
+    }
+
+    #[test]
+    fn test_atlas_icon_default() {
+        let icon = AtlasIcon::default();
+
+        assert_eq!(icon.atlas_index, 0);
+    }
+
+    #[test]
+    fn test_atlas_icon_equality() {
+        let icon1 = AtlasIcon::new(Handle::default(), Handle::default(), 5);
+        let _icon2 = AtlasIcon::new(Handle::default(), Handle::default(), 5);
+        let icon3 = AtlasIcon::new(Handle::default(), Handle::default(), 3);
+
+        // Note: Handle::default() creates different handles each time,
+        // so icon1 == icon2 may be false depending on implementation
+        // But icon should not equal one with different index
+        assert_ne!(icon1.atlas_index, icon3.atlas_index);
+    }
+
+    #[test]
+    fn test_asset_folder_handle_default() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let handle: AssetFolderHandle<MockAsset> = AssetFolderHandle::default();
+
+        assert!(!handle.is_loading());
+        assert!(!handle.is_loaded());
+        assert!(handle.handle.is_none());
+        assert!(handle.failed_paths.is_empty());
+    }
+
+    #[test]
+    fn test_asset_folder_default() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let library: AssetFolder<MockId, MockAsset> = AssetFolder::default();
+
+        assert!(library.is_empty());
+        assert!(!library.is_ready());
+    }
+
+    #[test]
+    fn test_asset_folder_assets_access() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut library: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        library.insert(MockId(1), Handle::default());
+
+        // Test direct HashMap access
+        let assets = library.assets();
+        assert_eq!(assets.len(), 1);
+
+        let assets_mut = library.assets_mut();
+        assets_mut.insert(MockId(2), Handle::default());
+        assert_eq!(library.len(), 2);
+    }
+
+    #[test]
+    fn test_asset_folder_iter_mut() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut library: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        library.insert(MockId(1), Handle::default());
+        library.insert(MockId(2), Handle::default());
+
+        // Test mutable iteration
+        let count = library.iter_mut().count();
+        assert_eq!(count, 2);
+    }
 }

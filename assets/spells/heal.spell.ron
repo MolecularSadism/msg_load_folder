@@ -1,0 +1,6 @@
+(
+    name: "Heal",
+    damage: -30.0,
+    mana_cost: 20,
+    description: "Restores health to the target (negative damage heals)",
+)
