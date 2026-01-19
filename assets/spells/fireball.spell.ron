@@ -1,0 +1,6 @@
+(
+    name: "Fireball",
+    damage: 50.0,
+    mana_cost: 25,
+    description: "Hurls a ball of fire at the target, dealing fire damage",
+)

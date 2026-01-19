@@ -1,0 +1,6 @@
+(
+    name: "Lightning Bolt",
+    damage: 75.0,
+    mana_cost: 40,
+    description: "Calls down a bolt of lightning from the sky",
+)

@@ -1,0 +1,6 @@
+(
+    name: "Disabled Spell",
+    damage: 999.0,
+    mana_cost: 0,
+    description: "This spell is disabled and should not be loaded (prefixed with _)",
+)
