@@ -19,8 +19,8 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_load_folder = "0.1"
-bevy = "0.16"
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.2.0" }
+bevy = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 ```
 
@@ -202,6 +202,7 @@ app.add_plugins(FolderLoaderPlugin::<SpellId, SpellData>::new(
 
 | `msg_load_folder` | Bevy |
 |-------------------|------|
+| 0.2               | 0.17 |
 | 0.1               | 0.16 |
 
 ## License
