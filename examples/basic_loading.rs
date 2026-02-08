@@ -102,19 +102,8 @@ fn setup() {
 
 /// System that checks and reports loading status.
 fn check_loading_status(folder_handle: Res<AssetFolderHandle<Spell>>) {
-    if folder_handle.is_changed() {
-        if folder_handle.is_loading() {
-            info!("Loading spells from folder...");
-        } else if folder_handle.is_loaded() {
-            info!("Spell loading complete!");
-
-            if !folder_handle.failed_paths.is_empty() {
-                warn!(
-                    "Some spells failed to load: {:?}",
-                    folder_handle.failed_paths
-                );
-            }
-        }
+    if folder_handle.is_changed() && folder_handle.is_loaded() {
+        info!("Spell folder processed!");
     }
 }
 
