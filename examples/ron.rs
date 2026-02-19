@@ -6,9 +6,11 @@
 //! 3. Configure the FolderLoaderPlugin
 //! 4. Access loaded assets in systems
 //!
+//! Runs headless (no window) and exits after loading completes.
+//!
 //! Run with: `cargo run --example basic`
 
-use bevy::prelude::*;
+use bevy::{log::LogPlugin, prelude::*};
 use bevy_common_assets::ron::RonAssetPlugin;
 use msg_load_folder::prelude::*;
 use serde::Deserialize;
@@ -18,16 +20,6 @@ use serde::Deserialize;
 // =============================================================================
 
 /// A spell asset loaded from RON files.
-///
-/// Each spell is defined in a `.spell.ron` file with this structure:
-/// ```ron
-/// (
-///     name: "Fireball",
-///     damage: 50.0,
-///     mana_cost: 25,
-///     description: "Hurls a ball of fire at the target",
-/// )
-/// ```
 #[derive(Asset, Clone, Reflect, Deserialize, Debug)]
 pub struct Spell {
     pub name: String,
@@ -49,8 +41,6 @@ pub struct SpellId(&'static str);
 
 impl From<String> for SpellId {
     fn from(s: String) -> Self {
-        // In a real application, you would use string interning (e.g., bevy's intern crate)
-        // For this example, we leak the string to get a static reference
         SpellId(Box::leak(s.into_boxed_str()))
     }
 }
@@ -75,23 +65,21 @@ struct DisplayedSpells(bool);
 
 fn main() {
     App::new()
-        // Add default Bevy plugins (including asset loading)
-        .add_plugins(DefaultPlugins.set(AssetPlugin {
-            // Configure asset folder relative to the project root
+        // Headless: use MinimalPlugins + LogPlugin + AssetPlugin instead of DefaultPlugins
+        .add_plugins(MinimalPlugins)
+        .add_plugins(LogPlugin::default())
+        .add_plugins(AssetPlugin {
             file_path: "assets".to_string(),
             ..default()
-        }))
+        })
         // Register the RON asset loader for .spell.ron files
         .add_plugins(RonAssetPlugin::<Spell>::new(&["spell.ron"]))
         // Add the folder loader plugin for spells
-        // This will automatically load all `.spell.ron` files from `assets/spells/`
         .add_plugins(FolderLoaderPlugin::<SpellId, Spell>::new(
             "spells",
             ".spell.ron",
         ))
-        // Initialize our display tracking resource
         .init_resource::<DisplayedSpells>()
-        // Add systems
         .add_systems(Startup, setup)
         .add_systems(Update, (check_loading_status, display_spells).chain())
         .run();
@@ -121,14 +109,14 @@ fn check_loading_status(folder_handle: Res<AssetFolderHandle<Spell>>) {
     }
 }
 
-/// System that displays loaded spells once loading is complete.
+/// System that displays loaded spells once loading is complete, then exits.
 fn display_spells(
     folder_handle: Res<AssetFolderHandle<Spell>>,
     spell_library: Res<AssetFolder<SpellId, Spell>>,
     spell_assets: Res<Assets<Spell>>,
     mut displayed: ResMut<DisplayedSpells>,
+    mut app_exit: MessageWriter<AppExit>,
 ) {
-    // Only display once after loading completes
     if !folder_handle.is_loaded() || displayed.0 {
         return;
     }
@@ -137,7 +125,6 @@ fn display_spells(
     info!("=== Loaded Spells ===");
     info!("Total spells loaded: {}", spell_library.len());
 
-    // Iterate through all loaded spells
     for (id, handle) in spell_library.iter() {
         if let Some(spell) = spell_assets.get(handle) {
             info!("---");
@@ -154,7 +141,6 @@ fn display_spells(
     info!("=====================");
 
     // Example: Access a specific spell by ID
-    // In a real game, you might look up spells when casting them
     for (id, handle) in spell_library.iter() {
         if let Some(spell) = spell_assets.get(handle) {
             if spell.name == "Fireball" {
@@ -162,4 +148,7 @@ fn display_spells(
             }
         }
     }
+
+    // Exit after displaying results
+    app_exit.write(AppExit::Success);
 }

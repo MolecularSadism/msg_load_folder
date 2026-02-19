@@ -24,22 +24,11 @@ serde = { version = "1.0", features = ["derive"] }
 ron = "0.8"
 bevy = { version = "0.18", default-features = false, features = [
     "bevy_asset",
-    "bevy_winit",
     "bevy_log",
-    "bevy_state",
     "std",
-    "x11",
-    "bevy_render",
-    "bevy_image",
-    "bevy_window",
-    "file_watcher",
     "multi_threaded",
 ] }
 bevy_common_assets = { version = "0.15.0", features = ["ron"] }
-
-[[example]]
-name = "basic"
-path = "examples/basic.rs"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
