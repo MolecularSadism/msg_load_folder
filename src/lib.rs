@@ -187,11 +187,8 @@ where
 pub struct AssetFolderHandle<A: Send + Sync + 'static> {
     /// Handle to the loaded folder.
     pub handle: Option<Handle<LoadedFolder>>,
-    /// Whether the folder has been fully processed.
-    pub loaded: bool,
-    /// Paths of assets that failed to load (to avoid retrying).
-    #[reflect(ignore)]
-    pub failed_paths: Vec<String>,
+    /// Whether the folder has been processed.
+    processed: bool,
     #[reflect(ignore)]
     _marker: PhantomData<A>,
 }
@@ -208,22 +205,15 @@ impl<A: Send + Sync + 'static> AssetFolderHandle<A> {
     pub fn new() -> Self {
         Self {
             handle: None,
-            loaded: false,
-            failed_paths: Vec::new(),
+            processed: false,
             _marker: PhantomData,
         }
     }
 
-    /// Check if the folder has started loading.
-    #[must_use]
-    pub fn is_loading(&self) -> bool {
-        self.handle.is_some() && !self.loaded
-    }
-
-    /// Check if the folder has finished loading.
+    /// Check if the folder has been processed.
     #[must_use]
     pub fn is_loaded(&self) -> bool {
-        self.loaded
+        self.processed
     }
 }
 
@@ -373,13 +363,18 @@ where
 // =============================================================================
 
 /// Generic system that loads assets from folders.
+///
+/// This system:
+/// 1. Initiates folder loading via AssetServer::load_folder
+/// 2. Waits for the LoadedFolder to be available
+/// 3. Processes all handles, extracting IDs from filenames
+/// 4. Populates the AssetFolder with ID -> Handle mappings
 fn load_assets_from_folder<Id, A>(
     asset_server: Res<AssetServer>,
     config: Res<FolderLoaderConfig<Id, A>>,
     mut folder_handle: ResMut<AssetFolderHandle<A>>,
     loaded_folders: Res<Assets<LoadedFolder>>,
     mut library: ResMut<AssetFolder<Id, A>>,
-    data_assets: Res<Assets<A>>,
 ) where
     Id: Clone + Copy + Eq + Hash + Send + Sync + Default + From<String> + std::fmt::Debug + 'static,
     A: Asset + Clone + Send + Sync + 'static,
@@ -391,7 +386,7 @@ fn load_assets_from_folder<Id, A>(
     }
 
     // Skip if already processed
-    if folder_handle.loaded {
+    if folder_handle.processed {
         return;
     }
 
@@ -403,16 +398,11 @@ fn load_assets_from_folder<Id, A>(
         return;
     };
 
-    let mut pending_assets = 0;
-    let mut loaded_count = 0;
-
-    // Process each file in the folder
+    // Process all handles at once
     for handle in &folder.handles {
         let Some(path) = handle.path() else {
             continue;
         };
-
-        let path_str = path.path().to_string_lossy().to_string();
 
         // Extract ID from filename
         let Some(id) = id_from_filename_with_extension::<Id>(path.path(), config.file_extension)
@@ -420,82 +410,25 @@ fn load_assets_from_folder<Id, A>(
             continue;
         };
 
-        // Skip if already registered
-        if library.contains(id) {
-            loaded_count += 1;
-            continue;
-        }
-
-        // Skip if already marked as failed
-        if folder_handle.failed_paths.contains(&path_str) {
-            continue;
-        }
-
-        // Get typed handle
+        // Get typed handle and register it
         let typed_handle: Handle<A> = handle.clone().typed();
+        library.insert(id, typed_handle);
 
-        // Check asset loading state
-        let load_state = asset_server.get_load_state(&typed_handle);
-
-        use bevy::asset::LoadState;
-        match load_state {
-            Some(LoadState::Loaded) => {
-                // Check if data is actually available
-                if data_assets.get(&typed_handle).is_some() {
-                    // Register in library
-                    library.insert(id, typed_handle);
-                    loaded_count += 1;
-
-                    debug!(
-                        "Loaded asset from folder: {:?} ({})",
-                        id,
-                        path.path().display()
-                    );
-                } else {
-                    // Data not available yet, wait
-                    pending_assets += 1;
-                }
-            }
-            Some(LoadState::Failed(_)) => {
-                // Mark as failed to avoid retrying
-                folder_handle.failed_paths.push(path_str);
-                warn!(
-                    "Asset failed to load and will be skipped: {} (ID: {:?})",
-                    path.path().display(),
-                    id
-                );
-            }
-            Some(LoadState::Loading) | None => {
-                // Still loading
-                pending_assets += 1;
-            }
-            Some(LoadState::NotLoaded) => {
-                // Not started loading yet
-                pending_assets += 1;
-            }
-        }
+        debug!(
+            "Registered asset handle: {:?} ({})",
+            id,
+            path.path().display()
+        );
     }
 
-    // Mark as loaded only if no assets are still pending
-    if pending_assets == 0 {
-        folder_handle.loaded = true;
+    // Mark as processed
+    folder_handle.processed = true;
 
-        let total_discovered = loaded_count + folder_handle.failed_paths.len();
-        if folder_handle.failed_paths.is_empty() {
-            info!(
-                "Loaded {} assets from folder '{}'",
-                loaded_count, config.folder_path
-            );
-        } else {
-            warn!(
-                "Loaded {} of {} assets from folder '{}' ({} failed)",
-                loaded_count,
-                total_discovered,
-                config.folder_path,
-                folder_handle.failed_paths.len()
-            );
-        }
-    }
+    info!(
+        "Processed {} asset handles from folder '{}'",
+        library.len(),
+        config.folder_path
+    );
 }
 
 // =============================================================================
@@ -713,17 +646,14 @@ mod tests {
         let mut handle: AssetFolderHandle<MockAsset> = AssetFolderHandle::new();
 
         // Initial state
-        assert!(!handle.is_loading());
         assert!(!handle.is_loaded());
 
         // After starting load
         handle.handle = Some(Handle::default());
-        assert!(handle.is_loading());
         assert!(!handle.is_loaded());
 
-        // After load complete
-        handle.loaded = true;
-        assert!(!handle.is_loading());
+        // After processing complete
+        handle.processed = true;
         assert!(handle.is_loaded());
     }
 
@@ -882,20 +812,6 @@ mod tests {
         assert!(!library.contains_key(&MockId(2)));
     }
 
-    #[test]
-    fn test_asset_folder_handle_failed_paths() {
-        #[derive(Asset, Clone, Reflect, Default)]
-        struct MockAsset;
-
-        let mut handle: AssetFolderHandle<MockAsset> = AssetFolderHandle::new();
-
-        // Track failed paths
-        handle.failed_paths.push("path/to/failed1.ron".to_string());
-        handle.failed_paths.push("path/to/failed2.ron".to_string());
-
-        assert_eq!(handle.failed_paths.len(), 2);
-        assert!(handle.failed_paths.contains(&"path/to/failed1.ron".to_string()));
-    }
 
     #[test]
     fn test_atlas_icon_image_node_creation() {
@@ -934,10 +850,8 @@ mod tests {
 
         let handle: AssetFolderHandle<MockAsset> = AssetFolderHandle::default();
 
-        assert!(!handle.is_loading());
         assert!(!handle.is_loaded());
         assert!(handle.handle.is_none());
-        assert!(handle.failed_paths.is_empty());
     }
 
     #[test]
