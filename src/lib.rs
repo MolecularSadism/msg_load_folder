@@ -153,6 +153,7 @@ where
         });
 
         // Initialize resources
+        app.init_asset::<A>();
         app.init_resource::<AssetFolderHandle<A>>();
         app.init_resource::<AssetFolder<Id, A>>();
 

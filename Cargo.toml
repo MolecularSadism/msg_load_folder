@@ -1,6 +1,6 @@
 [package]
 name = "msg_load_folder"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["ffmulks <63452434+ffmulks@users.noreply.github.com>"]
 description = "Generic folder-based asset loading infrastructure for Bevy games"
@@ -11,7 +11,7 @@ categories = ["game-development", "filesystem"]
 readme = "README.md"
 
 [dependencies]
-bevy = { version = "0.17", default-features = false, features = [
+bevy = { version = "0.18", default-features = false, features = [
     "bevy_asset",
     "bevy_log",
     "bevy_image",
@@ -21,7 +21,8 @@ bevy = { version = "0.17", default-features = false, features = [
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
-bevy = { version = "0.17", default-features = false, features = [
+ron = "0.8"
+bevy = { version = "0.18", default-features = false, features = [
     "bevy_asset",
     "bevy_winit",
     "bevy_log",
@@ -34,10 +35,11 @@ bevy = { version = "0.17", default-features = false, features = [
     "file_watcher",
     "multi_threaded",
 ] }
+bevy_common_assets = { version = "0.15.0", features = ["ron"] }
 
 [[example]]
-name = "basic_loading"
-path = "examples/basic_loading.rs"
+name = "basic"
+path = "examples/basic.rs"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

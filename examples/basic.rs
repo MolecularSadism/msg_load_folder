@@ -6,9 +6,10 @@
 //! 3. Configure the FolderLoaderPlugin
 //! 4. Access loaded assets in systems
 //!
-//! Run with: `cargo run --example basic_loading`
+//! Run with: `cargo run --example basic`
 
 use bevy::prelude::*;
+use bevy_common_assets::ron::RonAssetPlugin;
 use msg_load_folder::prelude::*;
 use serde::Deserialize;
 
@@ -80,6 +81,8 @@ fn main() {
             file_path: "assets".to_string(),
             ..default()
         }))
+        // Register the RON asset loader for .spell.ron files
+        .add_plugins(RonAssetPlugin::<Spell>::new(&["spell.ron"]))
         // Add the folder loader plugin for spells
         // This will automatically load all `.spell.ron` files from `assets/spells/`
         .add_plugins(FolderLoaderPlugin::<SpellId, Spell>::new(
