@@ -3,7 +3,8 @@
 //! Generic plugin-based folder loading infrastructure for Bevy games.
 //!
 //! This crate provides a plugin that automatically discovers and loads assets from folders,
-//! creating a library resource indexed by IDs derived from filenames.
+//! creating a library resource indexed by IDs derived from filenames. It works with any
+//! asset type — config files (RON, JSON), audio (OGG, WAV, MP3), textures, and more.
 //!
 //! ## Quick Start
 //!
@@ -49,6 +50,18 @@
 //!         }
 //!     }
 //! }
+//! ```
+//!
+//! ## Multiple File Extensions
+//!
+//! For folders with mixed formats, chain [`FolderLoaderPlugin::with_extension`]:
+//!
+//! ```rust,ignore
+//! app.add_plugins(
+//!     FolderLoaderPlugin::<SoundId, AudioSource>::new("sounds", ".ogg")
+//!         .with_extension(".wav")
+//!         .with_extension(".mp3"),
+//! );
 //! ```
 
 use std::collections::HashMap;

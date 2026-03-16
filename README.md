@@ -6,9 +6,10 @@ This crate provides a plugin that automatically discovers and loads assets from 
 
 ## Features
 
-- **Automatic discovery**: Loads all assets from a folder matching a specified extension
+- **Automatic discovery**: Loads all assets from a folder matching specified extensions
+- **Multiple extensions**: Load folders with mixed formats (e.g., `.ogg` + `.wav`) via `with_extension()`
 - **ID derivation**: Automatically derives IDs from filenames (e.g., `fireball.spell.ron` -> `SpellId("fireball")`)
-- **Generic design**: Works with any asset type and ID type
+- **Generic design**: Works with any asset type and ID type — config files, audio, textures, etc.
 - **Loading state tracking**: Provides resources to check loading progress
 - **Error handling**: Gracefully handles failed assets without crashing
 - **File filtering**: Skips hidden files (`.`) and disabled files (`_`)
@@ -19,8 +20,8 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.2.0" }
-bevy = "0.17"
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.3.0" }
+bevy = "0.18"
 serde = { version = "1.0", features = ["derive"] }
 ```
 
@@ -93,10 +94,18 @@ assets/
 Plugin that sets up automatic folder-based asset loading.
 
 ```rust
+// Single extension
 app.add_plugins(FolderLoaderPlugin::<SpellId, Spell>::new(
     "prefabs/spells",  // folder_path
     ".spell.ron",      // file_extension
 ));
+
+// Multiple extensions — chain with_extension()
+app.add_plugins(
+    FolderLoaderPlugin::<SoundId, AudioSource>::new("sounds", ".ogg")
+        .with_extension(".wav")
+        .with_extension(".mp3"),
+);
 ```
 
 ### `AssetFolder<Id, A>`
@@ -147,6 +156,30 @@ let image_node = icon.image_node();
 let texture_atlas = icon.texture_atlas();
 ```
 
+## Multiple File Extensions
+
+For folders containing assets in multiple formats (e.g., mixed audio files), use `with_extension()`:
+
+```rust
+// Loads .ogg, .wav, and .mp3 files from the sounds/ folder
+app.add_plugins(
+    FolderLoaderPlugin::<SoundId, AudioSource>::new("sounds", ".ogg")
+        .with_extension(".wav")
+        .with_extension(".mp3"),
+);
+```
+
+Files are matched against extensions in the order they were added. The ID is derived by stripping the matching extension from the filename:
+
+```
+assets/
+  sounds/
+    explosion.ogg       -> SoundId("explosion")
+    ambient.wav         -> SoundId("ambient")
+    click.mp3           -> SoundId("click")
+    _disabled.ogg       -> Skipped (starts with _)
+```
+
 ## Utility Functions
 
 ### `id_from_filename`
@@ -157,6 +190,16 @@ Extract an ID from a filename path.
 let path = Path::new("spells/fireball.spell.ron");
 let id: Option<SpellId> = id_from_filename(path, ".spell.ron");
 // Returns Some(SpellId("fireball"))
+```
+
+### `id_from_filename_with_extensions`
+
+Extract an ID by trying multiple extensions in order.
+
+```rust
+let path = Path::new("explosion.ogg");
+let id: Option<SoundId> = id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
+// Returns Some(SoundId("explosion"))
 ```
 
 ### `is_hidden_file`
@@ -202,6 +245,7 @@ app.add_plugins(FolderLoaderPlugin::<SpellId, SpellData>::new(
 
 | `msg_load_folder` | Bevy |
 |-------------------|------|
+| 0.3               | 0.18 |
 | 0.2               | 0.17 |
 | 0.1               | 0.16 |
 
