@@ -3,7 +3,8 @@
 //! Generic plugin-based folder loading infrastructure for Bevy games.
 //!
 //! This crate provides a plugin that automatically discovers and loads assets from folders,
-//! creating a library resource indexed by IDs derived from filenames.
+//! creating a library resource indexed by IDs derived from filenames. It works with any
+//! asset type — config files (RON, JSON), audio (OGG, WAV, MP3), textures, and more.
 //!
 //! ## Quick Start
 //!
@@ -50,6 +51,18 @@
 //!     }
 //! }
 //! ```
+//!
+//! ## Multiple File Extensions
+//!
+//! For folders with mixed formats, chain [`FolderLoaderPlugin::with_extension`]:
+//!
+//! ```rust,ignore
+//! app.add_plugins(
+//!     FolderLoaderPlugin::<SoundId, AudioSource>::new("sounds", ".ogg")
+//!         .with_extension(".wav")
+//!         .with_extension(".mp3"),
+//! );
+//! ```
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -62,7 +75,7 @@ use bevy::prelude::*;
 pub mod prelude {
     pub use crate::{
         AssetFolder, AssetFolderHandle, AtlasIcon, FolderLoaderPlugin, deserialize_optional_string,
-        id_from_filename, is_hidden_file,
+        id_from_filename, id_from_filename_with_extensions, is_hidden_file,
     };
 }
 
@@ -112,7 +125,7 @@ where
     A: Asset + Clone + Send + Sync + 'static,
 {
     folder_path: &'static str,
-    file_extension: &'static str,
+    file_extensions: Vec<&'static str>,
     _marker: PhantomData<(Id, A)>,
 }
 
@@ -133,9 +146,37 @@ where
     pub fn new(folder_path: &'static str, file_extension: &'static str) -> Self {
         Self {
             folder_path,
-            file_extension,
+            file_extensions: vec![file_extension],
             _marker: PhantomData,
         }
+    }
+
+    /// Adds an additional file extension to match.
+    ///
+    /// Use this to load folders containing assets with multiple file formats.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use msg_load_folder::prelude::*;
+    /// # use bevy::prelude::*;
+    /// # use serde::Deserialize;
+    /// # #[derive(Asset, Clone, Reflect, Deserialize)]
+    /// # struct Sound { name: String }
+    /// # #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+    /// # struct SoundId(u64);
+    /// # impl From<String> for SoundId { fn from(s: String) -> Self { SoundId(s.len() as u64) } }
+    /// # fn example(app: &mut App) {
+    /// app.add_plugins(
+    ///     FolderLoaderPlugin::<SoundId, Sound>::new("sounds", ".sfx.ron")
+    ///         .with_extension(".sound.ron"),
+    /// );
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_extension(mut self, extension: &'static str) -> Self {
+        self.file_extensions.push(extension);
+        self
     }
 }
 
@@ -148,7 +189,7 @@ where
         // Store config in a resource
         app.insert_resource(FolderLoaderConfig::<Id, A> {
             folder_path: self.folder_path,
-            file_extension: self.file_extension,
+            file_extensions: self.file_extensions.clone(),
             _marker: PhantomData,
         });
 
@@ -170,7 +211,7 @@ where
     A: Asset + Clone + Send + Sync + 'static,
 {
     folder_path: &'static str,
-    file_extension: &'static str,
+    file_extensions: Vec<&'static str>,
     _marker: PhantomData<(Id, A)>,
 }
 
@@ -405,7 +446,8 @@ fn load_assets_from_folder<Id, A>(
         };
 
         // Extract ID from filename
-        let Some(id) = id_from_filename_with_extension::<Id>(path.path(), config.file_extension)
+        let Some(id) =
+            id_from_filename_with_extensions::<Id>(path.path(), &config.file_extensions)
         else {
             continue;
         };
@@ -479,6 +521,22 @@ where
     }
 
     Some(Id::from(id_str.to_string()))
+}
+
+/// Extracts an ID from a filename by trying multiple extensions.
+///
+/// Tries each extension in order and returns the first match.
+/// Returns `None` if no extension matches or the file is hidden/disabled.
+pub fn id_from_filename_with_extensions<Id>(path: &Path, extensions: &[&str]) -> Option<Id>
+where
+    Id: From<String>,
+{
+    for ext in extensions {
+        if let Some(id) = id_from_filename_with_extension(path, ext) {
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// Legacy function for backwards compatibility.
@@ -880,6 +938,69 @@ mod tests {
         let assets_mut = library.assets_mut();
         assets_mut.insert(MockId(2), Handle::default());
         assert_eq!(library.len(), 2);
+    }
+
+    // ==========================================================================
+    // Multi-extension tests
+    // ==========================================================================
+
+    #[test]
+    fn test_id_from_filename_with_extensions_first_match() {
+        let path = Path::new("explosion.ogg");
+        let id: Option<MockId> =
+            id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
+        assert!(id.is_some());
+        assert_eq!(id.unwrap(), MockId(9)); // "explosion"
+    }
+
+    #[test]
+    fn test_id_from_filename_with_extensions_second_match() {
+        let path = Path::new("ambient.wav");
+        let id: Option<MockId> =
+            id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
+        assert!(id.is_some());
+        assert_eq!(id.unwrap(), MockId(7)); // "ambient"
+    }
+
+    #[test]
+    fn test_id_from_filename_with_extensions_no_match() {
+        let path = Path::new("music.flac");
+        let id: Option<MockId> =
+            id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_id_from_filename_with_extensions_hidden() {
+        let path = Path::new(".hidden.ogg");
+        let id: Option<MockId> =
+            id_from_filename_with_extensions(path, &[".ogg", ".wav"]);
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_id_from_filename_with_extensions_disabled() {
+        let path = Path::new("_disabled.wav");
+        let id: Option<MockId> =
+            id_from_filename_with_extensions(path, &[".ogg", ".wav"]);
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_id_from_filename_with_extensions_single() {
+        // Single extension behaves like id_from_filename_with_extension
+        let path = Path::new("fireball.spell.ron");
+        let id: Option<MockId> =
+            id_from_filename_with_extensions(path, &[".spell.ron"]);
+        assert!(id.is_some());
+        assert_eq!(id.unwrap(), MockId(8)); // "fireball"
+    }
+
+    #[test]
+    fn test_id_from_filename_with_extensions_empty_list() {
+        let path = Path::new("something.ogg");
+        let id: Option<MockId> = id_from_filename_with_extensions(path, &[]);
+        assert!(id.is_none());
     }
 
     #[test]
