@@ -81,7 +81,7 @@ fn main() {
 
 /// System that displays loaded sounds once loading is complete, then exits.
 fn display_sounds(
-    folder_handle: Res<AssetFolderHandle<SoundEffect>>,
+    folder_handle: Res<AssetFolderHandle<SoundId, SoundEffect>>,
     sound_library: Res<AssetFolder<SoundId, SoundEffect>>,
     sound_assets: Res<Assets<SoundEffect>>,
     mut displayed: ResMut<DisplayedSounds>,

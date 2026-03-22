@@ -195,7 +195,7 @@ where
 
         // Initialize resources
         app.init_asset::<A>();
-        app.init_resource::<AssetFolderHandle<A>>();
+        app.init_resource::<AssetFolderHandle<Id, A>>();
         app.init_resource::<AssetFolder<Id, A>>();
 
         // Add the loading system
@@ -221,26 +221,27 @@ where
 
 /// Resource tracking folder load state for an asset type.
 ///
-/// Generic over a marker type `A` to allow multiple folder handles
-/// for different asset types (spells, perks, actors, etc.).
+/// Generic over `Id` and `A` so that multiple [`FolderLoaderPlugin`]s using
+/// the same asset type `A` but different ID types get independent folder
+/// handles, avoiding collisions.
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
-pub struct AssetFolderHandle<A: Send + Sync + 'static> {
+pub struct AssetFolderHandle<Id: Send + Sync + 'static, A: Send + Sync + 'static> {
     /// Handle to the loaded folder.
     pub handle: Option<Handle<LoadedFolder>>,
     /// Whether the folder has been processed.
     processed: bool,
     #[reflect(ignore)]
-    _marker: PhantomData<A>,
+    _marker: PhantomData<(Id, A)>,
 }
 
-impl<A: Send + Sync + 'static> Default for AssetFolderHandle<A> {
+impl<Id: Send + Sync + 'static, A: Send + Sync + 'static> Default for AssetFolderHandle<Id, A> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<A: Send + Sync + 'static> AssetFolderHandle<A> {
+impl<Id: Send + Sync + 'static, A: Send + Sync + 'static> AssetFolderHandle<Id, A> {
     /// Create a new folder handle.
     #[must_use]
     pub fn new() -> Self {
@@ -413,7 +414,7 @@ where
 fn load_assets_from_folder<Id, A>(
     asset_server: Res<AssetServer>,
     config: Res<FolderLoaderConfig<Id, A>>,
-    mut folder_handle: ResMut<AssetFolderHandle<A>>,
+    mut folder_handle: ResMut<AssetFolderHandle<Id, A>>,
     loaded_folders: Res<Assets<LoadedFolder>>,
     mut library: ResMut<AssetFolder<Id, A>>,
 ) where
@@ -701,7 +702,7 @@ mod tests {
         #[derive(Asset, Clone, Reflect, Default)]
         struct MockAsset;
 
-        let mut handle: AssetFolderHandle<MockAsset> = AssetFolderHandle::new();
+        let mut handle: AssetFolderHandle<MockId, MockAsset> = AssetFolderHandle::new();
 
         // Initial state
         assert!(!handle.is_loaded());
@@ -906,7 +907,7 @@ mod tests {
         #[derive(Asset, Clone, Reflect, Default)]
         struct MockAsset;
 
-        let handle: AssetFolderHandle<MockAsset> = AssetFolderHandle::default();
+        let handle: AssetFolderHandle<MockId, MockAsset> = AssetFolderHandle::default();
 
         assert!(!handle.is_loaded());
         assert!(handle.handle.is_none());

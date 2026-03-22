@@ -92,7 +92,7 @@ fn setup() {
 }
 
 /// System that checks and reports loading status.
-fn check_loading_status(folder_handle: Res<AssetFolderHandle<Spell>>) {
+fn check_loading_status(folder_handle: Res<AssetFolderHandle<SpellId, Spell>>) {
     if folder_handle.is_changed() && folder_handle.is_loaded() {
         info!("Spell folder processed!");
     }
@@ -100,7 +100,7 @@ fn check_loading_status(folder_handle: Res<AssetFolderHandle<Spell>>) {
 
 /// System that displays loaded spells once loading is complete, then exits.
 fn display_spells(
-    folder_handle: Res<AssetFolderHandle<Spell>>,
+    folder_handle: Res<AssetFolderHandle<SpellId, Spell>>,
     spell_library: Res<AssetFolder<SpellId, Spell>>,
     spell_assets: Res<Assets<Spell>>,
     mut displayed: ResMut<DisplayedSpells>,
