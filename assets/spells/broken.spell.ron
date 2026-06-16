@@ -1,0 +1,9 @@
+// Intentionally malformed RON, used by the `ron` example to demonstrate that a
+// single broken file does NOT prevent the other spells in this folder from
+// loading. The `damage` field below is missing its value, which is a syntax
+// error, so this file fails to parse while its siblings load normally.
+(
+    name: "Broken Spell",
+    damage: ,
+    mana_cost: 10,
+)
