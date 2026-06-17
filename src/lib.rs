@@ -224,8 +224,24 @@ where
             _marker: PhantomData,
         });
 
-        // Initialize resources
-        app.init_asset::<A>();
+        // Initialize the asset storage, but only once per asset type `A`.
+        //
+        // `init_asset::<A>()` is NOT idempotent: internally it calls
+        // `insert_resource(Assets::<A>::default())`, which *replaces* any
+        // existing `Assets<A>` collection and drops every handle already loaded
+        // into it. When multiple `FolderLoaderPlugin`s share the same asset
+        // type `A` (e.g. two folders of `Image`s keyed by different `Id`s), or
+        // when another plugin has already loaded assets of type `A`, a second
+        // unconditional `init_asset::<A>()` would wipe the previously loaded
+        // assets — leaving lookups silently returning `None`.
+        //
+        // Guarding on `Assets<A>` existence makes the call idempotent: the
+        // first plugin to use asset type `A` sets up its storage (and the
+        // associated events/systems), and every subsequent `FolderLoaderPlugin`
+        // reuses that same collection instead of clobbering it.
+        if !app.world().contains_resource::<Assets<A>>() {
+            app.init_asset::<A>();
+        }
         app.init_resource::<AssetFolderHandle<Id, A>>();
         app.init_resource::<AssetFolder<Id, A>>();
         app.init_resource::<FolderScanState<Id, A>>();
@@ -1278,5 +1294,86 @@ mod tests {
         // Test mutable iteration
         let count = library.iter_mut().count();
         assert_eq!(count, 2);
+    }
+
+    // ==========================================================================
+    // Shared-asset-type regression tests
+    // ==========================================================================
+
+    /// Two `FolderLoaderPlugin`s that share the same asset type `A` but use
+    /// different `Id`s must not clobber each other's `Assets<A>` collection.
+    ///
+    /// Before the `init_asset` guard, the second plugin's `build()` called
+    /// `init_asset::<A>()` again, which `insert_resource`s a fresh
+    /// `Assets::<A>::default()` and silently drops every handle already loaded
+    /// into the collection. This reproduces that scenario: an asset is loaded
+    /// into the shared collection between the two plugin builds, and must
+    /// survive the second build.
+    #[test]
+    fn test_second_loader_does_not_wipe_shared_asset_storage() {
+        use bevy::asset::AssetPlugin;
+
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct SharedAsset {
+            value: u32,
+        }
+
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+        struct IdA(u64);
+        impl From<String> for IdA {
+            fn from(s: String) -> Self {
+                IdA(s.len() as u64)
+            }
+        }
+
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+        struct IdB(u64);
+        impl From<String> for IdB {
+            fn from(s: String) -> Self {
+                IdB(s.len() as u64)
+            }
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default());
+
+        // First folder loader for `SharedAsset`, keyed by `IdA`.
+        app.add_plugins(FolderLoaderPlugin::<IdA, SharedAsset>::new(
+            "folder_a", ".a.ron",
+        ));
+
+        // Simulate an asset being loaded into the shared collection (this is
+        // what e.g. a `from_world`/`FromWorld` loader or an earlier folder load
+        // would have done).
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<SharedAsset>>()
+            .add(SharedAsset { value: 42 });
+        assert!(
+            app.world()
+                .resource::<Assets<SharedAsset>>()
+                .get(&handle)
+                .is_some(),
+            "asset should be present right after insertion"
+        );
+
+        // Second folder loader for the SAME asset type, keyed by `IdB`.
+        // This previously wiped `Assets<SharedAsset>`.
+        app.add_plugins(FolderLoaderPlugin::<IdB, SharedAsset>::new(
+            "folder_b", ".b.ron",
+        ));
+
+        // The previously loaded asset must survive the second plugin's build.
+        let assets = app.world().resource::<Assets<SharedAsset>>();
+        assert!(
+            assets.get(&handle).is_some(),
+            "a second FolderLoaderPlugin sharing the asset type wiped Assets<SharedAsset>"
+        );
+        assert_eq!(assets.get(&handle).unwrap().value, 42);
+
+        // Both loaders' per-Id resources must still be present and independent.
+        assert!(app.world().contains_resource::<AssetFolder<IdA, SharedAsset>>());
+        assert!(app.world().contains_resource::<AssetFolder<IdB, SharedAsset>>());
     }
 }
