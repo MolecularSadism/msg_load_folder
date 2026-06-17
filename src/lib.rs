@@ -63,14 +63,45 @@
 //!         .with_extension(".mp3"),
 //! );
 //! ```
+//!
+//! ## Resilience & Hot Reloading
+//!
+//! Files are discovered by scanning the folder and then loaded *individually*,
+//! so the loader degrades gracefully: if a single file is malformed (for
+//! example a `.ron` file with a syntax or semantic error), only that one entry
+//! is affected — every other asset in the folder still loads. The broken file's
+//! ID is simply absent from the library until the file is fixed.
+//!
+//! When Bevy's asset watching is enabled the library also hot reloads:
+//!
+//! * **Editing** a file reloads its asset in place (the handle is stable, so
+//!   existing references keep working). This is also how a previously-broken
+//!   file recovers — fix it and it loads on the next save.
+//! * **Adding or removing** a file is picked up automatically and the library
+//!   is updated to match.
+//!
+//! Hot reloading requires the [`AssetServer`] to be watching for changes, which
+//! you opt into when adding Bevy's `AssetPlugin`:
+//!
+//! ```rust,ignore
+//! app.add_plugins(DefaultPlugins.set(AssetPlugin {
+//!     watch_for_changes_override: Some(true),
+//!     ..default()
+//! }));
+//! ```
+//!
+//! Without watching, the folder is still scanned and loaded once (and remains
+//! resilient to malformed files); it simply won't react to later changes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use bevy::asset::LoadedFolder;
+use bevy::asset::io::ErasedAssetReader;
+use bevy::asset::{AssetPath, LoadedFolder};
 use bevy::prelude::*;
+use bevy::tasks::{IoTaskPool, Task, block_on, futures_lite::StreamExt, poll_once};
 
 pub mod prelude {
     pub use crate::{
@@ -197,6 +228,7 @@ where
         app.init_asset::<A>();
         app.init_resource::<AssetFolderHandle<Id, A>>();
         app.init_resource::<AssetFolder<Id, A>>();
+        app.init_resource::<FolderScanState<Id, A>>();
 
         // Add the loading system
         app.add_systems(Update, load_assets_from_folder::<Id, A>);
@@ -227,10 +259,15 @@ where
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
 pub struct AssetFolderHandle<Id: Send + Sync + 'static, A: Send + Sync + 'static> {
-    /// Handle to the loaded folder.
+    /// Handle to the watched [`LoadedFolder`].
+    ///
+    /// Only populated when the [`AssetServer`] is watching for changes; it is
+    /// kept alive purely so Bevy reloads the folder (and emits an
+    /// [`AssetEvent<LoadedFolder>`]) when files are added, removed or moved,
+    /// which drives hot reloading.
     pub handle: Option<Handle<LoadedFolder>>,
-    /// Whether the folder has been processed.
-    processed: bool,
+    /// Whether the folder has been scanned and its assets registered at least once.
+    initial_load_complete: bool,
     #[reflect(ignore)]
     _marker: PhantomData<(Id, A)>,
 }
@@ -247,15 +284,58 @@ impl<Id: Send + Sync + 'static, A: Send + Sync + 'static> AssetFolderHandle<Id, 
     pub fn new() -> Self {
         Self {
             handle: None,
-            processed: false,
+            initial_load_complete: false,
             _marker: PhantomData,
         }
     }
 
-    /// Check if the folder has been processed.
+    /// Returns `true` once the folder has been scanned and its assets
+    /// registered at least once.
+    ///
+    /// Note that the library keeps reacting to changes after this returns
+    /// `true`: files that are edited, added or removed are picked up on the
+    /// fly when asset watching is enabled.
     #[must_use]
     pub fn is_loaded(&self) -> bool {
-        self.processed
+        self.initial_load_complete
+    }
+}
+
+// =============================================================================
+// FolderScanState (internal)
+// =============================================================================
+
+/// Internal, per-loader bookkeeping for the resilient folder scan.
+///
+/// Kept separate from [`AssetFolderHandle`] so the public, reflected resource
+/// stays simple and free of non-reflectable fields (the in-flight task).
+#[derive(Resource)]
+struct FolderScanState<Id, A>
+where
+    Id: Send + Sync + 'static,
+    A: Send + Sync + 'static,
+{
+    /// Whether the loader has performed its one-time setup yet.
+    initialized: bool,
+    /// Whether a (re)scan of the folder has been requested but not yet started.
+    rescan_requested: bool,
+    /// The in-flight directory scan, if one is running.
+    scan_task: Option<Task<Vec<PathBuf>>>,
+    _marker: PhantomData<(Id, A)>,
+}
+
+impl<Id, A> Default for FolderScanState<Id, A>
+where
+    Id: Send + Sync + 'static,
+    A: Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self {
+            initialized: false,
+            rescan_requested: false,
+            scan_task: None,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -404,74 +484,213 @@ where
 // Loading System
 // =============================================================================
 
-/// Generic system that loads assets from folders.
+/// Generic system that loads assets from folders, gracefully and with hot reloading.
 ///
-/// This system:
-/// 1. Initiates folder loading via AssetServer::load_folder
-/// 2. Waits for the LoadedFolder to be available
-/// 3. Processes all handles, extracting IDs from filenames
-/// 4. Populates the AssetFolder with ID -> Handle mappings
+/// Rather than relying on a single [`LoadedFolder`] (which Bevy fails *as a
+/// whole* if even one contained file fails to load, e.g. a RON file with a
+/// syntax/semantic error), this system enumerates the folder itself and loads
+/// each file *individually*. A single broken file therefore only affects its
+/// own entry — every other asset in the folder still loads.
+///
+/// Each frame it:
+/// 1. Performs one-time setup: requests an initial scan and, when asset
+///    watching is enabled, starts a [`LoadedFolder`] load whose change events
+///    drive hot reloading.
+/// 2. Reacts to [`AssetEvent<LoadedFolder>`]s (files added/removed/moved) by
+///    requesting a rescan.
+/// 3. Spawns an asynchronous directory scan when one is requested.
+/// 4. Applies finished scans: newly seen files are loaded and registered,
+///    files that disappeared are dropped.
+///
+/// Edits to the *contents* of an already-registered file are handled
+/// automatically by Bevy: the handle is stable, so the asset behind it is
+/// reloaded in place (this is also how a previously-broken file recovers once
+/// it is fixed).
 fn load_assets_from_folder<Id, A>(
     asset_server: Res<AssetServer>,
     config: Res<FolderLoaderConfig<Id, A>>,
     mut folder_handle: ResMut<AssetFolderHandle<Id, A>>,
-    loaded_folders: Res<Assets<LoadedFolder>>,
+    mut scan_state: ResMut<FolderScanState<Id, A>>,
+    mut folder_events: MessageReader<AssetEvent<LoadedFolder>>,
     mut library: ResMut<AssetFolder<Id, A>>,
 ) where
     Id: Clone + Copy + Eq + Hash + Send + Sync + Default + From<String> + std::fmt::Debug + 'static,
     A: Asset + Clone + Send + Sync + 'static,
 {
-    // Start loading the folder if we haven't yet
-    if folder_handle.handle.is_none() {
-        folder_handle.handle = Some(asset_server.load_folder(config.folder_path));
-        return;
+    // 1. One-time setup: request the initial scan and, when watching is on,
+    //    keep a folder handle alive so Bevy notifies us of structural changes.
+    if !scan_state.initialized {
+        scan_state.initialized = true;
+        scan_state.rescan_requested = true;
+        if asset_server.watching_for_changes() {
+            folder_handle.handle = Some(asset_server.load_folder(config.folder_path));
+        }
     }
 
-    // Skip if already processed
-    if folder_handle.processed {
-        return;
+    // 2. A change to the folder's structure (file added/removed/moved) reloads
+    //    the LoadedFolder; treat that as a signal to rescan. Content-only edits
+    //    are reloaded in place by Bevy and need no rescan.
+    if let Some(watched_folder) = folder_handle.handle.as_ref().map(Handle::id) {
+        for event in folder_events.read() {
+            if matches!(
+                event,
+                AssetEvent::Added { id } | AssetEvent::Modified { id } if *id == watched_folder
+            ) {
+                scan_state.rescan_requested = true;
+            }
+        }
     }
 
-    // Wait for folder to be loaded
-    let Some(folder_handle_ref) = &folder_handle.handle else {
-        return;
-    };
-    let Some(folder) = loaded_folders.get(folder_handle_ref) else {
-        return;
-    };
+    // 3. Kick off a scan if one is pending and none is already running.
+    if scan_state.rescan_requested && scan_state.scan_task.is_none() {
+        scan_state.scan_task = Some(spawn_directory_scan(
+            &asset_server,
+            config.folder_path,
+            config.file_extensions.clone(),
+        ));
+        scan_state.rescan_requested = false;
+    }
 
-    // Process all handles at once
-    for handle in &folder.handles {
-        let Some(path) = handle.path() else {
-            continue;
+    // 4. Apply a finished scan.
+    let finished = scan_state
+        .scan_task
+        .as_mut()
+        .and_then(|task| block_on(poll_once(task)));
+    if let Some(paths) = finished {
+        scan_state.scan_task = None;
+        apply_scan_results(&asset_server, &config, &mut library, paths);
+        if !folder_handle.initial_load_complete {
+            folder_handle.initial_load_complete = true;
+            info!(
+                "Loaded {} asset(s) from folder '{}'",
+                library.len(),
+                config.folder_path
+            );
+        }
+    }
+}
+
+/// Spawns an asynchronous, recursive scan of `folder_path` on the IO task pool.
+///
+/// The scan goes through the folder's [`AssetSource`](bevy::asset::io::AssetSource)
+/// reader (rather than `std::fs`) so it works with any asset source — the
+/// default filesystem, custom sources, processed assets, etc. It returns the
+/// paths of all files whose name ends with one of `file_extensions`.
+fn spawn_directory_scan(
+    asset_server: &AssetServer,
+    folder_path: &'static str,
+    file_extensions: Vec<&'static str>,
+) -> Task<Vec<PathBuf>> {
+    // `AssetServer` is cheap (Arc-backed) to clone and is needed inside the task.
+    let server = asset_server.clone();
+    let folder = AssetPath::parse(folder_path).into_owned();
+    IoTaskPool::get().spawn(async move {
+        let mut paths = Vec::new();
+        let source = match server.get_source(folder.source().clone_owned()) {
+            Ok(source) => source,
+            Err(err) => {
+                error!("FolderLoader: cannot scan '{folder}': {err}");
+                return paths;
+            }
         };
+        scan_directory(source.reader(), folder.path(), &file_extensions, &mut paths).await;
+        paths
+    })
+}
 
-        // Extract ID from filename
-        let Some(id) =
-            id_from_filename_with_extensions::<Id>(path.path(), &config.file_extensions)
+/// Recursively collects files under `path` whose name ends with one of
+/// `file_extensions`. Errors reading individual directories are logged and
+/// skipped so the rest of the tree is still scanned.
+async fn scan_directory(
+    reader: &dyn ErasedAssetReader,
+    path: &Path,
+    file_extensions: &[&str],
+    out: &mut Vec<PathBuf>,
+) {
+    let mut entries = match reader.read_directory(path).await {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!(
+                "FolderLoader: failed to read directory '{}': {err}",
+                path.display()
+            );
+            return;
+        }
+    };
+
+    while let Some(child) = entries.next().await {
+        match reader.is_directory(&child).await {
+            Ok(true) => Box::pin(scan_directory(reader, &child, file_extensions, out)).await,
+            Ok(false) => {
+                if filename_has_extension(&child, file_extensions) {
+                    out.push(child);
+                }
+            }
+            Err(err) => warn!(
+                "FolderLoader: failed to inspect '{}': {err}",
+                child.display()
+            ),
+        }
+    }
+}
+
+/// Registers the assets found by a scan, loading each file individually so a
+/// single broken file cannot block the others, and dropping entries whose
+/// backing files have disappeared.
+fn apply_scan_results<Id, A>(
+    asset_server: &AssetServer,
+    config: &FolderLoaderConfig<Id, A>,
+    library: &mut AssetFolder<Id, A>,
+    paths: Vec<PathBuf>,
+) where
+    Id: Clone + Copy + Eq + Hash + Send + Sync + Default + From<String> + std::fmt::Debug + 'static,
+    A: Asset + Clone + Send + Sync + 'static,
+{
+    let source = AssetPath::parse(config.folder_path)
+        .source()
+        .clone_owned();
+
+    let mut present: HashSet<Id> = HashSet::with_capacity(paths.len());
+    for path in paths {
+        // Authoritative filtering: skips hidden (`.`) / disabled (`_`) / empty
+        // names and yields the ID only for files matching a configured extension.
+        let Some(id) = id_from_filename_with_extensions::<Id>(&path, &config.file_extensions)
         else {
             continue;
         };
+        present.insert(id);
 
-        // Get typed handle and register it
-        let typed_handle: Handle<A> = handle.clone().typed();
-        library.insert(id, typed_handle);
-
-        debug!(
-            "Registered asset handle: {:?} ({})",
-            id,
-            path.path().display()
-        );
+        // Loading is idempotent: an already-loaded path returns its existing
+        // (stable) handle, so we only need to register newly discovered files.
+        if !library.contains(id) {
+            let asset_path = AssetPath::from(path.clone()).with_source(source.clone());
+            library.insert(id, asset_server.load::<A>(asset_path));
+            debug!("FolderLoader registered {:?} ({})", id, path.display());
+        }
     }
 
-    // Mark as processed
-    folder_handle.processed = true;
+    // Forget assets whose files were removed; dropping the handle lets Bevy
+    // unload the underlying asset.
+    let removed: Vec<Id> = library
+        .keys()
+        .filter(|id| !present.contains(id))
+        .collect();
+    for id in removed {
+        library.assets_mut().remove(&id);
+        debug!("FolderLoader removed {id:?} (file no longer present)");
+    }
+}
 
-    info!(
-        "Processed {} asset handles from folder '{}'",
-        library.len(),
-        config.folder_path
-    );
+/// Cheap pre-filter: does `path`'s file name end with any of `file_extensions`?
+///
+/// The full hidden/disabled/empty-name filtering is applied later by
+/// [`id_from_filename_with_extensions`]; this only avoids collecting obviously
+/// unrelated files during the scan.
+fn filename_has_extension(path: &Path, file_extensions: &[&str]) -> bool {
+    path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+        file_extensions.iter().any(|ext| name.ends_with(ext))
+    })
 }
 
 // =============================================================================
@@ -711,8 +930,8 @@ mod tests {
         handle.handle = Some(Handle::default());
         assert!(!handle.is_loaded());
 
-        // After processing complete
-        handle.processed = true;
+        // After the initial scan has registered the folder's assets
+        handle.initial_load_complete = true;
         assert!(handle.is_loaded());
     }
 
@@ -1002,6 +1221,49 @@ mod tests {
         let path = Path::new("something.ogg");
         let id: Option<MockId> = id_from_filename_with_extensions(path, &[]);
         assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_filename_has_extension_matches() {
+        assert!(filename_has_extension(
+            Path::new("spells/fireball.spell.ron"),
+            &[".spell.ron"]
+        ));
+        assert!(filename_has_extension(
+            Path::new("ambient.wav"),
+            &[".ogg", ".wav", ".mp3"]
+        ));
+    }
+
+    #[test]
+    fn test_filename_has_extension_no_match() {
+        assert!(!filename_has_extension(
+            Path::new("notes.txt"),
+            &[".spell.ron"]
+        ));
+        assert!(!filename_has_extension(Path::new("music.flac"), &[".ogg"]));
+        assert!(!filename_has_extension(Path::new("no_extension"), &[".ron"]));
+    }
+
+    #[test]
+    fn test_filename_has_extension_is_lenient_about_prefixes() {
+        // This pre-filter is intentionally lenient: hidden/disabled files still
+        // match here and are rejected later by `id_from_filename_with_extensions`.
+        assert!(filename_has_extension(
+            Path::new("_disabled.spell.ron"),
+            &[".spell.ron"]
+        ));
+        assert!(filename_has_extension(
+            Path::new(".hidden.spell.ron"),
+            &[".spell.ron"]
+        ));
+
+        // ...and the authoritative filter rejects them.
+        let disabled: Option<MockId> = id_from_filename_with_extensions(
+            Path::new("_disabled.spell.ron"),
+            &[".spell.ron"],
+        );
+        assert!(disabled.is_none());
     }
 
     #[test]

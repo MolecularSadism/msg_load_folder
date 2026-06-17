@@ -11,7 +11,8 @@ This crate provides a plugin that automatically discovers and loads assets from 
 - **ID derivation**: Automatically derives IDs from filenames (e.g., `fireball.spell.ron` -> `SpellId("fireball")`)
 - **Generic design**: Works with any asset type and ID type — config files, audio, textures, etc.
 - **Loading state tracking**: Provides resources to check loading progress
-- **Error handling**: Gracefully handles failed assets without crashing
+- **Resilient loading**: Files are loaded individually, so a single malformed file (e.g. a `.ron` with a syntax error) never blocks the rest of the folder
+- **Hot reloading**: When asset watching is on, edited, added and removed files are picked up automatically
 - **File filtering**: Skips hidden files (`.`) and disabled files (`_`)
 
 ## Installation
@@ -87,6 +88,37 @@ assets/
       health_potion.item.ron  -> ItemId("health_potion")
 ```
 
+## Resilience & Hot Reloading
+
+Files are discovered by scanning the folder and then loaded **individually**.
+This makes loading resilient: if one file is malformed — for example a `.ron`
+file with a syntax or semantic error — only that single entry is affected. Every
+other asset in the folder still loads, and the broken file's ID is simply absent
+from the library until the file is fixed. (This is a deliberate improvement over
+Bevy's `load_folder`, which fails the *entire* folder if any one file fails to
+load.)
+
+When Bevy's asset watching is enabled, the library also **hot reloads**:
+
+- **Editing** a file reloads its asset in place. Existing handles stay valid, so
+  references keep working. This is also how a previously-broken file recovers —
+  fix it and save, and it loads on the next watcher tick.
+- **Adding** or **removing** a file is detected automatically and the library is
+  updated to match.
+
+Hot reloading requires the `AssetServer` to be watching for changes. Opt in via
+`AssetPlugin` (and enable Bevy's `file_watcher` feature):
+
+```rust
+app.add_plugins(DefaultPlugins.set(AssetPlugin {
+    watch_for_changes_override: Some(true),
+    ..default()
+}));
+```
+
+Without watching, the folder is still scanned and loaded once (and remains
+resilient to malformed files); it just won't react to later changes.
+
 ## API Reference
 
 ### `FolderLoaderPlugin<Id, A>`
@@ -131,20 +163,21 @@ fn my_system(library: Res<AssetFolder<SpellId, Spell>>) {
 }
 ```
 
-### `AssetFolderHandle<A>`
+### `AssetFolderHandle<Id, A>`
 
 Resource tracking folder loading state.
 
 ```rust
-fn check_loading(handle: Res<AssetFolderHandle<Spell>>) {
-    if handle.is_loading() {
-        info!("Still loading spells...");
-    }
+fn check_loading(handle: Res<AssetFolderHandle<SpellId, Spell>>) {
     if handle.is_loaded() {
-        info!("All spells loaded!");
+        info!("Spell folder has been scanned and registered!");
     }
 }
 ```
+
+`is_loaded()` becomes `true` once the folder has been scanned and its assets
+registered at least once. The library keeps reacting to changes afterwards, so
+this is a "ready" signal rather than a terminal state.
 
 ### `AtlasIcon`
 

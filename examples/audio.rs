@@ -9,7 +9,7 @@
 //!
 //! Run with: `cargo run --example audio`
 
-use bevy::{log::LogPlugin, prelude::*};
+use bevy::{asset::LoadState, log::LogPlugin, prelude::*};
 use bevy_common_assets::ron::RonAssetPlugin;
 use msg_load_folder::prelude::*;
 use serde::Deserialize;
@@ -64,6 +64,8 @@ fn main() {
         .add_plugins(LogPlugin::default())
         .add_plugins(AssetPlugin {
             file_path: "assets".to_string(),
+            // This example is a one-shot that exits after loading; no watching.
+            watch_for_changes_override: Some(false),
             ..default()
         })
         // Register loaders for both extensions
@@ -81,13 +83,25 @@ fn main() {
 
 /// System that displays loaded sounds once loading is complete, then exits.
 fn display_sounds(
+    asset_server: Res<AssetServer>,
     folder_handle: Res<AssetFolderHandle<SoundId, SoundEffect>>,
     sound_library: Res<AssetFolder<SoundId, SoundEffect>>,
     sound_assets: Res<Assets<SoundEffect>>,
     mut displayed: ResMut<DisplayedSounds>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
-    if !folder_handle.is_loaded() || displayed.0 {
+    if displayed.0 || !folder_handle.is_loaded() {
+        return;
+    }
+    // `is_loaded()` only signals that the folder was scanned; wait for the
+    // sound assets themselves to finish loading before reporting.
+    let all_settled = sound_library.iter().all(|(_, handle)| {
+        matches!(
+            asset_server.load_state(handle.id()),
+            LoadState::Loaded | LoadState::Failed(_)
+        )
+    });
+    if !all_settled {
         return;
     }
     displayed.0 = true;

@@ -6,11 +6,15 @@
 //! 3. Configure the FolderLoaderPlugin
 //! 4. Access loaded assets in systems
 //!
+//! The `assets/spells/` folder deliberately includes a malformed file
+//! (`broken.spell.ron`). Notice that it does not prevent the other spells from
+//! loading — that is the resilient loading behavior in action.
+//!
 //! Runs headless (no window) and exits after loading completes.
 //!
-//! Run with: `cargo run --example basic`
+//! Run with: `cargo run --example ron`
 
-use bevy::{log::LogPlugin, prelude::*};
+use bevy::{asset::LoadState, log::LogPlugin, prelude::*};
 use bevy_common_assets::ron::RonAssetPlugin;
 use msg_load_folder::prelude::*;
 use serde::Deserialize;
@@ -70,6 +74,8 @@ fn main() {
         .add_plugins(LogPlugin::default())
         .add_plugins(AssetPlugin {
             file_path: "assets".to_string(),
+            // This example is a one-shot that exits after loading; no watching.
+            watch_for_changes_override: Some(false),
             ..default()
         })
         // Register the RON asset loader for .spell.ron files
@@ -100,20 +106,35 @@ fn check_loading_status(folder_handle: Res<AssetFolderHandle<SpellId, Spell>>) {
 
 /// System that displays loaded spells once loading is complete, then exits.
 fn display_spells(
+    asset_server: Res<AssetServer>,
     folder_handle: Res<AssetFolderHandle<SpellId, Spell>>,
     spell_library: Res<AssetFolder<SpellId, Spell>>,
     spell_assets: Res<Assets<Spell>>,
     mut displayed: ResMut<DisplayedSpells>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
-    if !folder_handle.is_loaded() || displayed.0 {
+    if displayed.0 || !folder_handle.is_loaded() {
+        return;
+    }
+    // `is_loaded()` means the folder has been scanned and its handles
+    // registered; the asset data itself still loads asynchronously. Wait until
+    // every discovered spell has settled (loaded — or failed, like the
+    // deliberately broken file) so we report a complete picture.
+    let all_settled = spell_library.iter().all(|(_, handle)| {
+        matches!(
+            asset_server.load_state(handle.id()),
+            LoadState::Loaded | LoadState::Failed(_)
+        )
+    });
+    if !all_settled {
         return;
     }
     displayed.0 = true;
 
     info!("=== Loaded Spells ===");
-    info!("Total spells loaded: {}", spell_library.len());
+    info!("Registered spell entries: {}", spell_library.len());
 
+    let mut failed = Vec::new();
     for (id, handle) in spell_library.iter() {
         if let Some(spell) = spell_assets.get(handle) {
             info!("---");
@@ -124,17 +145,28 @@ fn display_spells(
             if !spell.description.is_empty() {
                 info!("Description: {}", spell.description);
             }
+        } else {
+            // Registered, but the asset data isn't available — e.g. a malformed
+            // file. The folder still loaded everything else just fine.
+            failed.push(id);
         }
     }
 
     info!("=====================");
+    if !failed.is_empty() {
+        warn!(
+            "{} spell(s) failed to load and were skipped gracefully: {:?}",
+            failed.len(),
+            failed
+        );
+    }
 
     // Example: Access a specific spell by ID
     for (id, handle) in spell_library.iter() {
-        if let Some(spell) = spell_assets.get(handle) {
-            if spell.name == "Fireball" {
-                info!("Found Fireball spell with ID: {}", id);
-            }
+        if let Some(spell) = spell_assets.get(handle)
+            && spell.name == "Fireball"
+        {
+            info!("Found Fireball spell with ID: {}", id);
         }
     }
 
