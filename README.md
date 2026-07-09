@@ -21,8 +21,8 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.3.0" }
-bevy = "0.18"
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.4.0" }
+bevy = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 ```
 
@@ -105,6 +105,13 @@ When Bevy's asset watching is enabled, the library also **hot reloads**:
   fix it and save, and it loads on the next watcher tick.
 - **Adding** or **removing** a file is detected automatically and the library is
   updated to match.
+- **Re-adding** a file at a path that was previously removed loads its *fresh*
+  contents rather than a stale cached copy — so a remove-then-re-add cycle always
+  reflects what is currently on disk.
+
+Untouched entries keep their exact handle across any add/remove churn, so a
+structural change to the folder never invalidates references you hold to other
+assets.
 
 Hot reloading requires the `AssetServer` to be watching for changes. Opt in via
 `AssetPlugin` (and enable Bevy's `file_watcher` feature):
@@ -278,6 +285,7 @@ app.add_plugins(FolderLoaderPlugin::<SpellId, SpellData>::new(
 
 | `msg_load_folder` | Bevy |
 |-------------------|------|
+| 0.4               | 0.19 |
 | 0.3               | 0.18 |
 | 0.2               | 0.17 |
 | 0.1               | 0.16 |
