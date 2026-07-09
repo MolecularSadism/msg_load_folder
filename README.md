@@ -76,7 +76,7 @@ fn use_spells(
 
 Assets are organized in folders with a consistent naming convention:
 
-```
+```text
 assets/
   prefabs/
     spells/
@@ -116,11 +116,17 @@ assets.
 Hot reloading requires the `AssetServer` to be watching for changes. Opt in via
 `AssetPlugin` (and enable Bevy's `file_watcher` feature):
 
-```rust
-app.add_plugins(DefaultPlugins.set(AssetPlugin {
+```rust,no_run
+# use bevy::prelude::*;
+# use bevy::asset::AssetPlugin;
+# let mut app = App::new();
+# app.add_plugins(MinimalPlugins);
+// In a full app this is usually `DefaultPlugins.set(AssetPlugin { .. })`;
+// the watch setting lives on `AssetPlugin` either way.
+app.add_plugins(AssetPlugin {
     watch_for_changes_override: Some(true),
     ..default()
-}));
+});
 ```
 
 Without watching, the folder is still scanned and loaded once (and remains
@@ -133,6 +139,22 @@ resilient to malformed files); it just won't react to later changes.
 Plugin that sets up automatic folder-based asset loading.
 
 ```rust
+# use msg_load_folder::prelude::*;
+# use bevy::prelude::*;
+# use bevy::asset::AssetPlugin;
+# #[derive(Asset, Clone, Reflect)]
+# struct Spell { name: String }
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SpellId(u64);
+# impl From<String> for SpellId { fn from(s: String) -> Self { SpellId(s.len() as u64) } }
+# // Stand-in for a Bevy audio asset — any `Asset` type works the same way.
+# #[derive(Asset, Clone, Reflect)]
+# struct AudioSource;
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SoundId(u64);
+# impl From<String> for SoundId { fn from(s: String) -> Self { SoundId(s.len() as u64) } }
+# let mut app = App::new();
+# app.add_plugins(MinimalPlugins).add_plugins(AssetPlugin::default());
 // Single extension
 app.add_plugins(FolderLoaderPlugin::<SpellId, Spell>::new(
     "prefabs/spells",  // folder_path
@@ -152,22 +174,40 @@ app.add_plugins(
 Resource containing loaded assets indexed by ID.
 
 ```rust
-fn my_system(library: Res<AssetFolder<SpellId, Spell>>) {
-    // Get by ID
-    if let Some(handle) = library.get(spell_id) { ... }
+# use msg_load_folder::prelude::*;
+# use bevy::prelude::*;
+# #[derive(Asset, Clone, Reflect)]
+# struct Spell { name: String }
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SpellId(u64);
+# let mut library: AssetFolder<SpellId, Spell> = AssetFolder::new();
+# let spell_id = SpellId(1);
+# library.insert(spell_id, Handle::default());
+// Inside a system you'd take `library: Res<AssetFolder<SpellId, Spell>>`.
 
-    // Check if ID exists
-    if library.contains(spell_id) { ... }
-
-    // Iterate all
-    for (id, handle) in library.iter() { ... }
-
-    // Check loading state
-    if library.is_ready() { ... }
-
-    // Get count
-    let count = library.len();
+// Get by ID
+if let Some(handle) = library.get(spell_id) {
+    let _ = handle;
 }
+
+// Check if ID exists
+if library.contains(spell_id) {
+    // ...
+}
+
+// Iterate all
+for (id, handle) in library.iter() {
+    let _ = (id, handle);
+}
+
+// Check loading state
+if library.is_ready() {
+    // ...
+}
+
+// Get count
+let count = library.len();
+# assert_eq!(count, 1);
 ```
 
 ### `AssetFolderHandle<Id, A>`
@@ -175,11 +215,18 @@ fn my_system(library: Res<AssetFolder<SpellId, Spell>>) {
 Resource tracking folder loading state.
 
 ```rust
-fn check_loading(handle: Res<AssetFolderHandle<SpellId, Spell>>) {
-    if handle.is_loaded() {
-        info!("Spell folder has been scanned and registered!");
-    }
+# use msg_load_folder::prelude::*;
+# use bevy::prelude::*;
+# #[derive(Asset, Clone, Reflect)]
+# struct Spell;
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SpellId(u64);
+# let handle: AssetFolderHandle<SpellId, Spell> = AssetFolderHandle::new();
+// Inside a system you'd take `handle: Res<AssetFolderHandle<SpellId, Spell>>`.
+if handle.is_loaded() {
+    info!("Spell folder has been scanned and registered!");
 }
+# assert!(!handle.is_loaded());
 ```
 
 `is_loaded()` becomes `true` once the folder has been scanned and its assets
@@ -191,9 +238,15 @@ this is a "ready" signal rather than a terminal state.
 Helper struct for icon rendering from texture atlases.
 
 ```rust
+# use msg_load_folder::prelude::*;
+# use bevy::prelude::*;
+# let image_handle = Handle::default();
+# let layout_handle = Handle::default();
+# let atlas_index = 0;
 let icon = AtlasIcon::new(image_handle, layout_handle, atlas_index);
 let image_node = icon.image_node();
 let texture_atlas = icon.texture_atlas();
+# let _ = (image_node, texture_atlas);
 ```
 
 ## Multiple File Extensions
@@ -201,6 +254,17 @@ let texture_atlas = icon.texture_atlas();
 For folders containing assets in multiple formats (e.g., mixed audio files), use `with_extension()`:
 
 ```rust
+# use msg_load_folder::prelude::*;
+# use bevy::prelude::*;
+# use bevy::asset::AssetPlugin;
+# // Stand-in for a Bevy audio asset — any `Asset` type works the same way.
+# #[derive(Asset, Clone, Reflect)]
+# struct AudioSource;
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SoundId(u64);
+# impl From<String> for SoundId { fn from(s: String) -> Self { SoundId(s.len() as u64) } }
+# let mut app = App::new();
+# app.add_plugins(MinimalPlugins).add_plugins(AssetPlugin::default());
 // Loads .ogg, .wav, and .mp3 files from the sounds/ folder
 app.add_plugins(
     FolderLoaderPlugin::<SoundId, AudioSource>::new("sounds", ".ogg")
@@ -211,7 +275,7 @@ app.add_plugins(
 
 Files are matched against extensions in the order they were added. The ID is derived by stripping the matching extension from the filename:
 
-```
+```text
 assets/
   sounds/
     explosion.ogg       -> SoundId("explosion")
@@ -227,9 +291,16 @@ assets/
 Extract an ID from a filename path.
 
 ```rust
+use std::path::Path;
+use msg_load_folder::id_from_filename;
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SpellId(u64);
+# impl From<String> for SpellId { fn from(s: String) -> Self { SpellId(s.len() as u64) } }
+
 let path = Path::new("spells/fireball.spell.ron");
 let id: Option<SpellId> = id_from_filename(path, ".spell.ron");
 // Returns Some(SpellId("fireball"))
+# assert!(id.is_some());
 ```
 
 ### `id_from_filename_with_extensions`
@@ -237,9 +308,16 @@ let id: Option<SpellId> = id_from_filename(path, ".spell.ron");
 Extract an ID by trying multiple extensions in order.
 
 ```rust
+use std::path::Path;
+use msg_load_folder::id_from_filename_with_extensions;
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SoundId(u64);
+# impl From<String> for SoundId { fn from(s: String) -> Self { SoundId(s.len() as u64) } }
+
 let path = Path::new("explosion.ogg");
 let id: Option<SoundId> = id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
 // Returns Some(SoundId("explosion"))
+# assert!(id.is_some());
 ```
 
 ### `is_hidden_file`
@@ -247,6 +325,9 @@ let id: Option<SoundId> = id_from_filename_with_extensions(path, &[".ogg", ".wav
 Check if a path represents a hidden or disabled file.
 
 ```rust
+use std::path::Path;
+use msg_load_folder::is_hidden_file;
+
 assert!(is_hidden_file(Path::new(".hidden.ron")));
 assert!(is_hidden_file(Path::new("_disabled.ron")));
 assert!(!is_hidden_file(Path::new("normal.ron")));
@@ -257,18 +338,22 @@ assert!(!is_hidden_file(Path::new("normal.ron")));
 Serde helper for optional string fields.
 
 ```rust
+use serde::Deserialize;
+use msg_load_folder::deserialize_optional_string;
+
 #[derive(Deserialize)]
 struct MyData {
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     atlas_slice: Option<String>,
 }
+# let _ = MyData { atlas_slice: None };
 ```
 
 ## Integration with `msg_interned_id`
 
 This crate works well with `msg_interned_id` for efficient ID types:
 
-```rust
+```rust,ignore
 use msg_interned_id::InternedId;
 use msg_load_folder::prelude::*;
 

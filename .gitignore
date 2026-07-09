@@ -1,15 +1,26 @@
 # Rust build artifacts
 /target/
+**/*.rs.bk
+*.pdb
 
-# IDE
+# rustc internal compiler error dumps
+rustc-ice-*.txt
+
+# Bevy asset processing output
+imported_assets/
+.cargo-ok
+
+# IDE / editor
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Configs
-.*/
+# Local overrides (tracked config like .github/ stays committed)
+.env
+*.local
