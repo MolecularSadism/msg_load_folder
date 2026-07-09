@@ -78,7 +78,11 @@
 //!   existing references keep working). This is also how a previously-broken
 //!   file recovers — fix it and it loads on the next save.
 //! * **Adding or removing** a file is picked up automatically and the library
-//!   is updated to match.
+//!   is updated to match. Untouched entries keep their exact handle, so a
+//!   structural change never invalidates references you hold to other assets.
+//! * **Re-adding** a file at a previously-removed path loads its *fresh*
+//!   contents, never a stale cached copy — a remove-then-re-add cycle always
+//!   reflects what is currently on disk.
 //!
 //! Hot reloading requires the [`AssetServer`] to be watching for changes, which
 //! you opt into when adding Bevy's `AssetPlugin`:
@@ -99,7 +103,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use bevy::asset::io::ErasedAssetReader;
-use bevy::asset::{AssetPath, LoadedFolder};
+use bevy::asset::{AssetPath, LoadState, LoadedFolder};
 use bevy::prelude::*;
 use bevy::tasks::{IoTaskPool, Task, block_on, futures_lite::StreamExt, poll_once};
 
@@ -680,7 +684,26 @@ fn apply_scan_results<Id, A>(
         // (stable) handle, so we only need to register newly discovered files.
         if !library.contains(id) {
             let asset_path = AssetPath::from(path.clone()).with_source(source.clone());
-            library.insert(id, asset_server.load::<A>(asset_path));
+            let handle = asset_server.load::<A>(asset_path.clone());
+
+            // If the asset server reports this path as already settled the very
+            // instant we ask to load it, the path was loaded before and `load`
+            // handed back a *cached* asset rather than reading the file. This is
+            // exactly the remove-then-re-add case: dropping our handle when the
+            // file disappeared did not evict the cached asset, so without a
+            // reload the library would keep serving the previous, now-stale
+            // contents of a file that has since been rewritten on disk. Force a
+            // reload so the freshly written file is picked up. A genuinely new
+            // path is still `Loading` here, so this never fires on first load.
+            if matches!(
+                asset_server.load_state(handle.id()),
+                LoadState::Loaded | LoadState::Failed(_)
+            ) {
+                asset_server.reload(asset_path);
+                debug!("FolderLoader reloaded re-added {:?} ({})", id, path.display());
+            }
+
+            library.insert(id, handle);
             debug!("FolderLoader registered {:?} ({})", id, path.display());
         }
     }
@@ -1375,5 +1398,78 @@ mod tests {
         // Both loaders' per-Id resources must still be present and independent.
         assert!(app.world().contains_resource::<AssetFolder<IdA, SharedAsset>>());
         assert!(app.world().contains_resource::<AssetFolder<IdB, SharedAsset>>());
+    }
+
+    // ==========================================================================
+    // Bevy 0.19 resources-as-components regression tests
+    // ==========================================================================
+
+    /// Bevy 0.19 makes `Resource` a subtrait of `Component`, and
+    /// `#[reflect(Resource)]` now reflects the `Component` trait (via
+    /// `ReflectComponent`) rather than a standalone `ReflectResource`. This locks
+    /// that in: the reflected `AssetFolderHandle` must register and expose
+    /// `ReflectComponent` in the type registry.
+    #[test]
+    fn reflected_resource_registers_as_component_in_0_19() {
+        use bevy::ecs::reflect::ReflectComponent;
+
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, Reflect)]
+        struct ReflectableId(u64);
+        impl From<String> for ReflectableId {
+            fn from(s: String) -> Self {
+                ReflectableId(s.len() as u64)
+            }
+        }
+
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct ReflectableAsset;
+
+        let mut app = App::new();
+        app.register_type::<AssetFolderHandle<ReflectableId, ReflectableAsset>>();
+
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        let registration = registry
+            .get(std::any::TypeId::of::<
+                AssetFolderHandle<ReflectableId, ReflectableAsset>,
+            >())
+            .expect("AssetFolderHandle should be registered");
+
+        assert!(
+            registration.data::<ReflectComponent>().is_some(),
+            "in Bevy 0.19 a #[reflect(Resource)] type must also reflect the Component trait"
+        );
+    }
+
+    /// A `#[derive(Resource)]` type must still behave as a plain resource under
+    /// the 0.19 component-backed model: inserted once, fetched by type, and
+    /// mutated in place — none of which should route through the ECS component
+    /// storage from the user's perspective.
+    #[test]
+    fn derive_resource_still_behaves_as_a_resource_in_0_19() {
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+        struct Id(u64);
+        impl From<String> for Id {
+            fn from(s: String) -> Self {
+                Id(s.len() as u64)
+            }
+        }
+
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut app = App::new();
+        assert!(!app.world().contains_resource::<AssetFolder<Id, MockAsset>>());
+
+        app.init_resource::<AssetFolder<Id, MockAsset>>();
+        assert!(app.world().contains_resource::<AssetFolder<Id, MockAsset>>());
+
+        // Mutable resource access works.
+        app.world_mut()
+            .resource_mut::<AssetFolder<Id, MockAsset>>()
+            .insert(Id(3), Handle::default());
+        assert_eq!(
+            app.world().resource::<AssetFolder<Id, MockAsset>>().len(),
+            1
+        );
     }
 }

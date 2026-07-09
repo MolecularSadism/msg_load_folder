@@ -114,6 +114,15 @@ fn signal_folder_changed(app: &mut App) {
         .write_message(AssetEvent::<LoadedFolder>::Modified { id });
 }
 
+/// The stable handle id currently registered for `name`, if any. Used to prove
+/// that structural changes to the folder never re-key an untouched entry.
+fn handle_id(app: &App, name: &str) -> Option<bevy::asset::AssetId<Thing>> {
+    app.world()
+        .resource::<AssetFolder<ThingId, Thing>>()
+        .get(ThingId::from(name.to_string()))
+        .map(|h| h.id())
+}
+
 /// A file edited on disk is reloaded in place behind its stable handle — and a
 /// file that was previously broken recovers the same way once it parses.
 #[test]
@@ -200,6 +209,278 @@ fn removing_a_file_drops_it() {
         "removed file should be dropped from the library"
     );
     assert_eq!(loaded_value(&app, "keep"), Some(1));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Several files added between scans are all discovered on a single signal.
+#[test]
+fn adding_many_files_at_once_is_discovered() {
+    let root = unique_asset_root();
+    write(&root, "things/alpha.thing.ron", "(value: 1)");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "alpha") == Some(1)),
+        "alpha should load initially"
+    );
+
+    // Drop three new files in one go, then fire a single folder-change signal.
+    write(&root, "things/beta.thing.ron", "(value: 2)");
+    write(&root, "things/gamma.thing.ron", "(value: 3)");
+    write(&root, "things/delta.thing.ron", "(value: 4)");
+    signal_folder_changed(&mut app);
+
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "beta") == Some(2)
+            && loaded_value(a, "gamma") == Some(3)
+            && loaded_value(a, "delta") == Some(4)),
+        "all newly added files should be discovered from a single signal"
+    );
+    // The original entry is untouched.
+    assert_eq!(loaded_value(&app, "alpha"), Some(1));
+    assert_eq!(
+        app.world().resource::<AssetFolder<ThingId, Thing>>().len(),
+        4
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Removing every file empties the library without panicking, and the loader
+/// still reports itself loaded (it is a "ready", not a terminal, signal).
+#[test]
+fn removing_all_files_empties_the_library() {
+    let root = unique_asset_root();
+    write(&root, "things/one.thing.ron", "(value: 1)");
+    write(&root, "things/two.thing.ron", "(value: 2)");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "one") == Some(1)
+            && loaded_value(a, "two") == Some(2)),
+        "both files should load initially"
+    );
+
+    std::fs::remove_file(root.join("things/one.thing.ron")).unwrap();
+    std::fs::remove_file(root.join("things/two.thing.ron")).unwrap();
+    signal_folder_changed(&mut app);
+
+    assert!(
+        run_until(&mut app, 1000, |a| a
+            .world()
+            .resource::<AssetFolder<ThingId, Thing>>()
+            .is_empty()),
+        "library should be empty once every file is removed"
+    );
+    // Still "loaded": the folder was scanned; it simply has nothing in it now.
+    assert!(
+        app.world()
+            .resource::<AssetFolderHandle<ThingId, Thing>>()
+            .is_loaded()
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Rapid add → remove → re-add churn of the same file keeps the library in sync
+/// every step of the way, and the re-added file loads its (possibly new) value.
+#[test]
+fn add_remove_readd_churn_stays_in_sync() {
+    let root = unique_asset_root();
+    write(&root, "things/keep.thing.ron", "(value: 0)");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "keep") == Some(0)),
+        "keep should load initially"
+    );
+
+    // Add.
+    write(&root, "things/churn.thing.ron", "(value: 1)");
+    signal_folder_changed(&mut app);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "churn") == Some(1)),
+        "churn should be discovered after being added"
+    );
+
+    // Remove.
+    std::fs::remove_file(root.join("things/churn.thing.ron")).unwrap();
+    signal_folder_changed(&mut app);
+    assert!(
+        run_until(&mut app, 1000, |a| !in_library(a, "churn")),
+        "churn should be dropped after being removed"
+    );
+
+    // Re-add with a different value.
+    write(&root, "things/churn.thing.ron", "(value: 2)");
+    signal_folder_changed(&mut app);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "churn") == Some(2)),
+        "re-added churn should be rediscovered and load its new value"
+    );
+
+    // The untouched neighbour survived every round.
+    assert_eq!(loaded_value(&app, "keep"), Some(0));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A single rescan that sees one file gone and a different one appeared applies
+/// both the removal and the addition together.
+#[test]
+fn interleaved_add_and_remove_in_one_scan() {
+    let root = unique_asset_root();
+    write(&root, "things/stays.thing.ron", "(value: 1)");
+    write(&root, "things/goes.thing.ron", "(value: 2)");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "stays") == Some(1)
+            && loaded_value(a, "goes") == Some(2)),
+        "both initial files should load"
+    );
+
+    // Remove one and add another before any rescan runs.
+    std::fs::remove_file(root.join("things/goes.thing.ron")).unwrap();
+    write(&root, "things/arrives.thing.ron", "(value: 3)");
+    signal_folder_changed(&mut app);
+
+    assert!(
+        run_until(&mut app, 1000, |a| !in_library(a, "goes")
+            && loaded_value(a, "arrives") == Some(3)),
+        "one scan should apply both the removal and the addition"
+    );
+    assert_eq!(loaded_value(&app, "stays"), Some(1));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Adding and removing files around an existing entry must never re-key it: its
+/// handle id has to stay identical so references held elsewhere keep working.
+#[test]
+fn structural_changes_keep_existing_handles_stable() {
+    let root = unique_asset_root();
+    write(&root, "things/anchor.thing.ron", "(value: 1)");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "anchor") == Some(1)),
+        "anchor should load initially"
+    );
+    let anchor_before = handle_id(&app, "anchor").expect("anchor registered");
+
+    // Add a sibling.
+    write(&root, "things/added.thing.ron", "(value: 2)");
+    signal_folder_changed(&mut app);
+    assert!(
+        run_until(&mut app, 1000, |a| in_library(a, "added")),
+        "sibling should be discovered"
+    );
+    assert_eq!(
+        handle_id(&app, "anchor"),
+        Some(anchor_before),
+        "adding a file must not re-key the anchor's handle"
+    );
+
+    // Remove the sibling again.
+    std::fs::remove_file(root.join("things/added.thing.ron")).unwrap();
+    signal_folder_changed(&mut app);
+    assert!(
+        run_until(&mut app, 1000, |a| !in_library(a, "added")),
+        "sibling should be dropped"
+    );
+    assert_eq!(
+        handle_id(&app, "anchor"),
+        Some(anchor_before),
+        "removing a file must not re-key the anchor's handle"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Files added in a nested subdirectory are found by the recursive scan.
+#[test]
+fn files_added_in_nested_subfolders_are_discovered() {
+    let root = unique_asset_root();
+    write(&root, "things/top.thing.ron", "(value: 1)");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "top") == Some(1)),
+        "top-level file should load"
+    );
+
+    // Add a file two directories deep.
+    write(&root, "things/nested/deep/buried.thing.ron", "(value: 7)");
+    signal_folder_changed(&mut app);
+
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "buried") == Some(7)),
+        "a file added deep in a subfolder should be discovered by the recursive scan"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A file that never parsed (registered but with no usable asset) is still
+/// dropped from the library once it is removed from disk.
+#[test]
+fn removing_a_broken_file_drops_it() {
+    let root = unique_asset_root();
+    write(&root, "things/good.thing.ron", "(value: 1)");
+    write(&root, "things/broken.thing.ron", "definitely not ron");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "good") == Some(1)
+            && in_library(a, "broken")),
+        "good should load and broken should still be registered"
+    );
+    // Broken parsed to nothing but occupies a slot.
+    assert_eq!(loaded_value(&app, "broken"), None);
+
+    std::fs::remove_file(root.join("things/broken.thing.ron")).unwrap();
+    signal_folder_changed(&mut app);
+
+    assert!(
+        run_until(&mut app, 1000, |a| !in_library(a, "broken")),
+        "a removed broken file should be dropped just like a valid one"
+    );
+    assert_eq!(loaded_value(&app, "good"), Some(1));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A redundant folder-change signal that reports no structural change is a
+/// no-op: nothing is dropped, re-keyed, or duplicated.
+#[test]
+fn signal_without_changes_is_a_noop() {
+    let root = unique_asset_root();
+    write(&root, "things/alpha.thing.ron", "(value: 1)");
+    write(&root, "things/beta.thing.ron", "(value: 2)");
+
+    let mut app = build_app(&root);
+    assert!(
+        run_until(&mut app, 1000, |a| loaded_value(a, "alpha") == Some(1)
+            && loaded_value(a, "beta") == Some(2)),
+        "both files should load initially"
+    );
+    let alpha_before = handle_id(&app, "alpha");
+    let beta_before = handle_id(&app, "beta");
+
+    // Fire a signal without touching the folder at all.
+    signal_folder_changed(&mut app);
+    // Let the (no-op) rescan run to completion.
+    run_until(&mut app, 200, |_| false);
+
+    assert_eq!(
+        app.world().resource::<AssetFolder<ThingId, Thing>>().len(),
+        2,
+        "a no-op signal must not change the entry count"
+    );
+    assert_eq!(handle_id(&app, "alpha"), alpha_before, "alpha must not be re-keyed");
+    assert_eq!(handle_id(&app, "beta"), beta_before, "beta must not be re-keyed");
 
     let _ = std::fs::remove_dir_all(&root);
 }
