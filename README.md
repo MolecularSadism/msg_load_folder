@@ -1,5 +1,10 @@
 # msg_load_folder
 
+[![CI](https://github.com/MolecularSadism/msg_load_folder/workflows/CI/badge.svg)](https://github.com/MolecularSadism/msg_load_folder/actions)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/MolecularSadism/msg_load_folder#license)
+[![Bevy](https://img.shields.io/badge/Bevy-0.19-blue.svg)](https://bevyengine.org/)
+[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
+
 Generic plugin-based folder loading infrastructure for Bevy games.
 
 This crate provides a plugin that automatically discovers and loads assets from folders, creating a library resource indexed by IDs derived from filenames. It enables data-driven game design where content is defined in asset files rather than code.
