@@ -233,22 +233,6 @@ if handle.is_loaded() {
 registered at least once. The library keeps reacting to changes afterwards, so
 this is a "ready" signal rather than a terminal state.
 
-### `AtlasIcon`
-
-Helper struct for icon rendering from texture atlases.
-
-```rust
-# use msg_load_folder::prelude::*;
-# use bevy::prelude::*;
-# let image_handle = Handle::default();
-# let layout_handle = Handle::default();
-# let atlas_index = 0;
-let icon = AtlasIcon::new(image_handle, layout_handle, atlas_index);
-let image_node = icon.image_node();
-let texture_atlas = icon.texture_atlas();
-# let _ = (image_node, texture_atlas);
-```
-
 ## Multiple File Extensions
 
 For folders containing assets in multiple formats (e.g., mixed audio files), use `with_extension()`:

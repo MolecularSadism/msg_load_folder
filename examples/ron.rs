@@ -3,7 +3,7 @@
 //! This example shows how to:
 //! 1. Define a custom asset type
 //! 2. Define an ID type for asset lookup
-//! 3. Configure the FolderLoaderPlugin
+//! 3. Configure the `FolderLoaderPlugin`
 //! 4. Access loaded assets in systems
 //!
 //! The `assets/spells/` folder deliberately includes a malformed file

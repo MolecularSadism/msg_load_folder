@@ -19,7 +19,7 @@ use serde::Deserialize;
 // =============================================================================
 
 /// A sound effect descriptor loaded from RON files.
-/// In a real project you would use Bevy's AudioSource directly with .ogg/.wav,
+/// In a real project you would use Bevy's `AudioSource` directly with .ogg/.wav,
 /// but this example uses RON to stay self-contained without binary assets.
 #[derive(Asset, Clone, Reflect, Deserialize, Debug)]
 pub struct SoundEffect {

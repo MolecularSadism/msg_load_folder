@@ -1,0 +1,4 @@
+# The crate name appears in prose (README title, doc comments) where rendering
+# it as inline code would be undesirable. Treat it as a valid identifier so
+# `clippy::doc_markdown` does not demand backticks around it.
+doc-valid-idents = ["msg_load_folder", ".."]

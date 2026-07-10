@@ -12,7 +12,7 @@ use bevy::tasks::{IoTaskPool, Task, block_on, futures_lite::StreamExt, poll_once
 
 pub mod prelude {
     pub use crate::{
-        AssetFolder, AssetFolderHandle, AtlasIcon, FolderLoaderPlugin, deserialize_optional_string,
+        AssetFolder, AssetFolderHandle, FolderLoaderPlugin, deserialize_optional_string,
         id_from_filename, id_from_filename_with_extensions, is_hidden_file,
     };
 }
@@ -273,8 +273,8 @@ where
 ///
 /// # Type Parameters
 ///
-/// * `Id` - The ID type (e.g., SpellId, PerkId)
-/// * `A` - The asset type (e.g., Spell, PerkData)
+/// * `Id` - The ID type (e.g., `SpellId`, `PerkId`)
+/// * `A` - The asset type (e.g., `Spell`, `PerkData`)
 ///
 /// # Example
 ///
@@ -390,13 +390,13 @@ where
         self.assets.iter_mut().map(|(id, h)| (*id, h))
     }
 
-    /// Direct access to underlying HashMap.
+    /// Direct access to underlying `HashMap`.
     #[must_use]
     pub fn assets(&self) -> &HashMap<Id, Handle<A>> {
         &self.assets
     }
 
-    /// Mutable access to underlying HashMap.
+    /// Mutable access to underlying `HashMap`.
     #[must_use]
     pub fn assets_mut(&mut self) -> &mut HashMap<Id, Handle<A>> {
         &mut self.assets
@@ -653,6 +653,7 @@ fn filename_has_extension(path: &Path, file_extensions: &[&str]) -> bool {
 /// - The file doesn't have the expected extension
 /// - The filename starts with `.` (hidden file)
 /// - The filename starts with `_` (disabled file)
+#[must_use]
 pub fn id_from_filename_with_extension<Id>(path: &Path, extension: &str) -> Option<Id>
 where
     Id: From<String>,
@@ -689,6 +690,7 @@ where
 ///
 /// Tries each extension in order and returns the first match.
 /// Returns `None` if no extension matches or the file is hidden/disabled.
+#[must_use]
 pub fn id_from_filename_with_extensions<Id>(path: &Path, extensions: &[&str]) -> Option<Id>
 where
     Id: From<String>,
@@ -703,6 +705,7 @@ where
 
 /// Legacy function for backwards compatibility.
 /// Extracts an ID from a filename using extension from path itself.
+#[must_use]
 pub fn id_from_filename<Id>(path: &Path, extension: &str) -> Option<Id>
 where
     Id: From<String>,
@@ -713,67 +716,10 @@ where
 /// Check if a path represents a hidden or disabled file.
 #[must_use]
 pub fn is_hidden_file(path: &Path) -> bool {
-    path.file_name()
-        .map(|name| {
-            let name_str = name.to_string_lossy();
-            name_str.starts_with('.') || name_str.starts_with('_')
-        })
-        .unwrap_or(false)
-}
-
-// =============================================================================
-// AtlasIcon
-// =============================================================================
-
-/// Icon rendering data from a texture atlas slice.
-///
-/// Contains all the handles and indices needed to render an icon from
-/// an atlas-based spritesheet.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct AtlasIcon {
-    /// The atlas image handle.
-    pub image: Handle<Image>,
-    /// The texture atlas layout handle.
-    pub layout: Handle<TextureAtlasLayout>,
-    /// The atlas index for this icon's slice.
-    pub atlas_index: usize,
-}
-
-impl AtlasIcon {
-    /// Creates a new AtlasIcon.
-    #[must_use]
-    pub fn new(
-        image: Handle<Image>,
-        layout: Handle<TextureAtlasLayout>,
-        atlas_index: usize,
-    ) -> Self {
-        Self {
-            image,
-            layout,
-            atlas_index,
-        }
-    }
-
-    /// Returns a clone of the underlying image handle for UI usage.
-    #[must_use]
-    pub fn get_image(&self) -> Handle<Image> {
-        self.image.clone()
-    }
-
-    /// Returns the texture atlas configuration for this icon.
-    #[must_use]
-    pub fn texture_atlas(&self) -> TextureAtlas {
-        TextureAtlas {
-            layout: self.layout.clone(),
-            index: self.atlas_index,
-        }
-    }
-
-    /// Creates an ImageNode from this icon.
-    #[must_use]
-    pub fn image_node(&self) -> ImageNode {
-        ImageNode::from_atlas_image(self.image.clone(), self.texture_atlas())
-    }
+    path.file_name().is_some_and(|name| {
+        let name_str = name.to_string_lossy();
+        name_str.starts_with('.') || name_str.starts_with('_')
+    })
 }
 
 // =============================================================================
@@ -782,6 +728,10 @@ impl AtlasIcon {
 
 /// Deserializes a string field to `Option<String>`.
 /// Accepts a bare string and converts empty strings to `None`.
+///
+/// # Errors
+///
+/// Returns a deserialization error if the underlying value is not a string.
 ///
 /// # Example
 ///
@@ -904,16 +854,6 @@ mod tests {
         assert_eq!(iter_count, 1);
     }
 
-    #[test]
-    fn test_atlas_icon() {
-        let icon = AtlasIcon::new(Handle::default(), Handle::default(), 5);
-
-        assert_eq!(icon.atlas_index, 5);
-
-        let atlas = icon.texture_atlas();
-        assert_eq!(atlas.index, 5);
-    }
-
     // ==========================================================================
     // Additional tests for Bevy 0.17 migration validation
     // ==========================================================================
@@ -1032,36 +972,6 @@ mod tests {
         assert!(!library.contains_key(&MockId(2)));
     }
 
-
-    #[test]
-    fn test_atlas_icon_image_node_creation() {
-        let icon = AtlasIcon::new(Handle::default(), Handle::default(), 3);
-
-        // Test that image_node() creates a valid ImageNode
-        let _image_node = icon.image_node();
-
-        // Test get_image returns a handle
-        let _image = icon.get_image();
-    }
-
-    #[test]
-    fn test_atlas_icon_default() {
-        let icon = AtlasIcon::default();
-
-        assert_eq!(icon.atlas_index, 0);
-    }
-
-    #[test]
-    fn test_atlas_icon_equality() {
-        let icon1 = AtlasIcon::new(Handle::default(), Handle::default(), 5);
-        let _icon2 = AtlasIcon::new(Handle::default(), Handle::default(), 5);
-        let icon3 = AtlasIcon::new(Handle::default(), Handle::default(), 3);
-
-        // Note: Handle::default() creates different handles each time,
-        // so icon1 == icon2 may be false depending on implementation
-        // But icon should not equal one with different index
-        assert_ne!(icon1.atlas_index, icon3.atlas_index);
-    }
 
     #[test]
     fn test_asset_folder_handle_default() {

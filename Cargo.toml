@@ -38,5 +38,9 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 
 [lints.clippy]
+pedantic = { level = "warn", priority = -1 }
 too_many_arguments = "allow"
 type_complexity = "allow"
+# Bevy systems must take `Res`/`ResMut` params by value; taking them by
+# reference is not possible, so this pedantic lint is a false positive here.
+needless_pass_by_value = "allow"

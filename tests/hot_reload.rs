@@ -120,7 +120,7 @@ fn handle_id(app: &App, name: &str) -> Option<bevy::asset::AssetId<Thing>> {
     app.world()
         .resource::<AssetFolder<ThingId, Thing>>()
         .get(ThingId::from(name.to_string()))
-        .map(|h| h.id())
+        .map(Handle::id)
 }
 
 /// A file edited on disk is reloaded in place behind its stable handle — and a
