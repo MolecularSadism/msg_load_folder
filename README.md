@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MolecularSadism/msg_load_folder/workflows/CI/badge.svg)](https://github.com/MolecularSadism/msg_load_folder/actions)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/MolecularSadism/msg_load_folder#license)
-[![Bevy](https://img.shields.io/badge/Bevy-0.19-blue.svg)](https://bevyengine.org/)
+[![Bevy](https://img.shields.io/badge/Bevy-0.18%20%7C%200.19-blue.svg)](https://bevyengine.org/)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 
 Generic plugin-based folder loading infrastructure for Bevy games.
@@ -34,9 +34,35 @@ bevy = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 ```
 
+### Selecting a Bevy version
+
+One release of this crate supports **both Bevy 0.19 and Bevy 0.18**, selected
+by mutually exclusive cargo features. The default is `bevy_0_19`; projects on
+Bevy 0.18 opt out of the default and pick `bevy_0_18` instead:
+
+```toml
+[dependencies]
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.4.0", default-features = false, features = ["bevy_0_18"] }
+bevy = "0.18"
+serde = { version = "1.0", features = ["derive"] }
+```
+
+Exactly one of `bevy_0_18` / `bevy_0_19` must be enabled — enabling both or
+neither is a compile error. Only the selected Bevy major is ever compiled into
+the build, so a toolchain that can only compile one of the two majors is never
+exposed to the other. The crate's public API is identical under both features,
+and the active engine crate is re-exported as `msg_load_folder::bevy` for code
+that wants to name the engine without caring which major is active.
+
+One extra feature exists: `file_watcher` enables Bevy's real OS file watcher
+for whichever major is active (games usually enable Bevy's own `file_watcher`
+feature themselves instead; this crate's flag mainly serves its end-to-end
+test).
+
 ## Quick Start
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 use msg_load_folder::prelude::*;
 use bevy::prelude::*;
 use serde::Deserialize;
@@ -125,6 +151,7 @@ Hot reloading requires the `AssetServer` to be watching for changes. Opt in via
 `AssetPlugin` (and enable Bevy's `file_watcher` feature):
 
 ```rust,no_run
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use bevy::prelude::*;
 # use bevy::asset::AssetPlugin;
 # let mut app = App::new();
@@ -149,6 +176,7 @@ Passive discovery only surfaces a folder once it *finishes* (or fails)
 loading, so with several folders in flight prefer `watch()`:
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use msg_load_folder::prelude::*;
 # use bevy::prelude::*;
 # use bevy::asset::AssetPlugin;
@@ -186,6 +214,7 @@ loaded — so any system that can see the resource can also use its handles.
 Call it at plugin-build time:
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use msg_load_folder::prelude::*;
 # use bevy::prelude::*;
 # use bevy::asset::AssetPlugin;
@@ -230,6 +259,7 @@ loading bars.
 Plugin that sets up automatic folder-based asset loading.
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use msg_load_folder::prelude::*;
 # use bevy::prelude::*;
 # use bevy::asset::AssetPlugin;
@@ -265,6 +295,7 @@ app.add_plugins(
 Resource containing loaded assets indexed by ID.
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use msg_load_folder::prelude::*;
 # use bevy::prelude::*;
 # #[derive(Asset, Clone, Reflect)]
@@ -306,6 +337,7 @@ let count = library.len();
 Resource tracking folder loading state.
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use msg_load_folder::prelude::*;
 # use bevy::prelude::*;
 # #[derive(Asset, Clone, Reflect)]
@@ -330,6 +362,7 @@ Trait for config assets that know the path they were loaded from, so
 hot-reload and error messages can name the file without a lookup table.
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use bevy::prelude::*;
 use msg_load_folder::AssetFile;
 
@@ -352,6 +385,7 @@ impl AssetFile for Config {
 For folders containing assets in multiple formats (e.g., mixed audio files), use `with_extension()`:
 
 ```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 # use msg_load_folder::prelude::*;
 # use bevy::prelude::*;
 # use bevy::asset::AssetPlugin;
@@ -468,7 +502,7 @@ app.add_plugins(FolderLoaderPlugin::<SpellId, SpellData>::new(
 
 | `msg_load_folder` | Bevy |
 |-------------------|------|
-| 0.4               | 0.19 |
+| 0.4               | 0.19 (default, `bevy_0_19`) or 0.18 (`bevy_0_18`) |
 | 0.3               | 0.18 |
 | 0.2               | 0.17 |
 | 0.1               | 0.16 |

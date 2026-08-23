@@ -2,8 +2,9 @@
 //!
 //! Unlike `hot_reload.rs` — which drives the exact triggers Bevy's watcher
 //! produces (a per-file `reload`, a folder `AssetEvent`) directly, so it is fast
-//! and deterministic — this test enables Bevy's `file_watcher` feature and
-//! mutates real files on disk, proving the *whole* pipeline works: OS event →
+//! and deterministic — this test requires Bevy's real file watcher (enable
+//! this crate's `file_watcher` feature, which forwards to whichever Bevy major
+//! is active) and mutates real files on disk, proving the *whole* pipeline works: OS event →
 //! Bevy watcher → folder reload → our rescan → library update.
 //!
 //! OS file watching is inherently timing-dependent (and unavailable on some
@@ -11,8 +12,16 @@
 //! explicitly with:
 //!
 //! ```text
-//! cargo test --test file_watcher -- --ignored --nocapture
+//! cargo test --test file_watcher --features file_watcher -- --ignored --nocapture
 //! ```
+
+// Bind `bevy` / `bevy_common_assets` to whichever major the active cargo
+// feature selects (see Cargo.toml); under the default `bevy_0_19` feature the
+// names already exist, so no alias is needed.
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy018 as bevy;
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy_common_assets018 as bevy_common_assets;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};

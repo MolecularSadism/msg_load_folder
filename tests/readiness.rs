@@ -2,6 +2,14 @@
 //! [`LoadResource`] asset-backed-resource pattern, run against a real
 //! (temporary) asset folder and a real `AssetServer`.
 
+// Bind `bevy` / `bevy_common_assets` to whichever major the active cargo
+// feature selects (see Cargo.toml); under the default `bevy_0_19` feature the
+// names already exist, so no alias is needed.
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy018 as bevy;
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy_common_assets018 as bevy_common_assets;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;

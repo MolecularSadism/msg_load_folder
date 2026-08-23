@@ -1,5 +1,46 @@
 #![doc = include_str!("../README.md")]
 
+// =============================================================================
+// Bevy version selection
+// =============================================================================
+//
+// This crate compiles against exactly one Bevy major at a time, chosen by the
+// mutually exclusive cargo features `bevy_0_19` (default) and `bevy_0_18`.
+// The dependency for the inactive major is never compiled. All version
+// divergence is confined to this block plus a handful of `cfg`-gated tests;
+// the rest of the crate is written against the API surface the two majors
+// share.
+
+#[cfg(all(feature = "bevy_0_18", feature = "bevy_0_19"))]
+compile_error!(
+    "features `bevy_0_18` and `bevy_0_19` are mutually exclusive: enable exactly one \
+     (use `default-features = false` when selecting `bevy_0_18`)"
+);
+
+#[cfg(not(any(feature = "bevy_0_18", feature = "bevy_0_19")))]
+compile_error!(
+    "one of the features `bevy_0_18` or `bevy_0_19` must be enabled to select the Bevy \
+     version this crate compiles against (`bevy_0_19` is on by default)"
+);
+
+/// The Bevy crate this build of the library was compiled against — Bevy 0.18,
+/// selected by the `bevy_0_18` feature.
+///
+/// Re-exported so downstream code (including this crate's own tests, examples
+/// and doc examples) can name the engine as `msg_load_folder::bevy` without
+/// caring which major is active.
+#[cfg(all(feature = "bevy_0_18", not(feature = "bevy_0_19")))]
+pub extern crate bevy018 as bevy;
+
+/// The Bevy crate this build of the library was compiled against — Bevy 0.19,
+/// selected by the `bevy_0_19` feature (on by default).
+///
+/// Re-exported so downstream code (including this crate's own tests, examples
+/// and doc examples) can name the engine as `msg_load_folder::bevy` without
+/// caring which major is active.
+#[cfg(feature = "bevy_0_19")]
+pub extern crate bevy;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -41,6 +82,7 @@ pub mod prelude {
 /// # Example
 ///
 /// ```rust
+/// # #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 /// # use msg_load_folder::prelude::*;
 /// # use bevy::prelude::*;
 /// # use serde::Deserialize;
@@ -101,6 +143,7 @@ where
     /// # Example
     ///
     /// ```rust
+    /// # #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
     /// # use msg_load_folder::prelude::*;
     /// # use bevy::prelude::*;
     /// # use serde::Deserialize;
@@ -284,6 +327,7 @@ where
 /// # Example
 ///
 /// ```rust
+/// # #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 /// # use msg_load_folder::prelude::*;
 /// # use bevy::prelude::*;
 /// # use serde::Deserialize;
@@ -722,6 +766,7 @@ impl LoadedFolders {
     /// # Example
     ///
     /// ```rust
+    /// # #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
     /// # use msg_load_folder::prelude::*;
     /// # use bevy::prelude::*;
     /// fn start_loading(asset_server: Res<AssetServer>, mut folders: ResMut<LoadedFolders>) {
@@ -776,6 +821,7 @@ impl LoadedFolders {
 /// # Example
 ///
 /// ```rust
+/// # #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 /// # use msg_load_folder::prelude::*;
 /// # use bevy::prelude::*;
 /// # let mut app = App::new();
@@ -969,6 +1015,7 @@ impl ResourceHandles {
 /// # Example
 ///
 /// ```rust
+/// # #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 /// # use msg_load_folder::prelude::*;
 /// # use bevy::prelude::*;
 /// # let mut app = App::new();
@@ -1020,6 +1067,7 @@ fn load_resource_assets(world: &mut World) {
 /// # Example
 ///
 /// ```rust
+/// # #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
 /// # use bevy::prelude::*;
 /// use msg_load_folder::AssetFile;
 ///
@@ -1625,7 +1673,8 @@ mod tests {
     }
 
     // ==========================================================================
-    // Bevy 0.19 resources-as-components regression tests
+    // Resources-as-components regression tests (the one API divergence between
+    // the supported Bevy majors — everything else this crate uses is identical)
     // ==========================================================================
 
     /// Bevy 0.19 makes `Resource` a subtrait of `Component`, and
@@ -1633,6 +1682,7 @@ mod tests {
     /// `ReflectComponent`) rather than a standalone `ReflectResource`. This locks
     /// that in: the reflected `AssetFolderHandle` must register and expose
     /// `ReflectComponent` in the type registry.
+    #[cfg(feature = "bevy_0_19")]
     #[test]
     fn reflected_resource_registers_as_component_in_0_19() {
         use bevy::ecs::reflect::ReflectComponent;
@@ -1664,12 +1714,48 @@ mod tests {
         );
     }
 
-    /// A `#[derive(Resource)]` type must still behave as a plain resource under
-    /// the 0.19 component-backed model: inserted once, fetched by type, and
-    /// mutated in place — none of which should route through the ECS component
-    /// storage from the user's perspective.
+    /// Bevy 0.18 counterpart of the test above: there `Resource` is *not* a
+    /// `Component`, and `#[reflect(Resource)]` registers the standalone
+    /// `ReflectResource` type data. This locks in that the reflected
+    /// `AssetFolderHandle` exposes `ReflectResource` in the type registry.
+    #[cfg(all(feature = "bevy_0_18", not(feature = "bevy_0_19")))]
     #[test]
-    fn derive_resource_still_behaves_as_a_resource_in_0_19() {
+    fn reflected_resource_registers_reflect_resource_in_0_18() {
+        use bevy::ecs::reflect::ReflectResource;
+
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, Reflect)]
+        struct ReflectableId(u64);
+        impl From<String> for ReflectableId {
+            fn from(s: String) -> Self {
+                ReflectableId(s.len() as u64)
+            }
+        }
+
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct ReflectableAsset;
+
+        let mut app = App::new();
+        app.register_type::<AssetFolderHandle<ReflectableId, ReflectableAsset>>();
+
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        let registration = registry
+            .get(std::any::TypeId::of::<
+                AssetFolderHandle<ReflectableId, ReflectableAsset>,
+            >())
+            .expect("AssetFolderHandle should be registered");
+
+        assert!(
+            registration.data::<ReflectResource>().is_some(),
+            "in Bevy 0.18 a #[reflect(Resource)] type must reflect the Resource trait"
+        );
+    }
+
+    /// A `#[derive(Resource)]` type must behave as a plain resource on both
+    /// supported Bevy majors — under 0.19's component-backed model exactly as
+    /// under 0.18's standalone-resource model: inserted once, fetched by type,
+    /// and mutated in place.
+    #[test]
+    fn derive_resource_behaves_as_a_resource() {
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
         struct Id(u64);
         impl From<String> for Id {

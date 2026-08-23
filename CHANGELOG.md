@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Dual Bevy support: 0.18 and 0.19 from one branch.** The Bevy major is now
+  selected by mutually exclusive cargo features — `bevy_0_19` (default) and
+  `bevy_0_18` — backed by package-renamed optional dependencies, so only the
+  selected major is ever compiled (a toolchain that cannot build one major is
+  never exposed to it). The public API is identical under both features; the
+  active engine crate is re-exported as `msg_load_folder::bevy`. Bevy 0.18
+  consumers depend on the crate with `default-features = false` and
+  `features = ["bevy_0_18"]`.
+  - `bevy_common_assets` (used by the examples and integration tests) follows
+    the same selection: `0.17` under `bevy_0_19`, `0.15` under `bevy_0_18`.
+  - A new `file_watcher` feature forwards Bevy's real OS file watcher to
+    whichever major is active; the ignored end-to-end watcher test now runs
+    with `cargo test --test file_watcher --features file_watcher -- --ignored`.
+  - The only observable engine divergence for this crate is Bevy 0.19's
+    resources-as-components reflection (`#[reflect(Resource)]` registering
+    `ReflectComponent` vs 0.18's `ReflectResource`); it is covered by
+    per-version regression tests and does not affect the crate's API.
+
 ## [0.4.0] - 2026-07-09
 
 Upgrade to **Bevy 0.19**.

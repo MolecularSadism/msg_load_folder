@@ -11,6 +11,14 @@
 //! hot-reload behavior deterministically without depending on OS-level file
 //! watching (which is slow and flaky in CI).
 
+// Bind `bevy` / `bevy_common_assets` to whichever major the active cargo
+// feature selects (see Cargo.toml); under the default `bevy_0_19` feature the
+// names already exist, so no alias is needed.
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy018 as bevy;
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy_common_assets018 as bevy_common_assets;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -102,10 +110,7 @@ fn reload(app: &App, rel: &str) {
 /// after pointing the loader at a real `LoadedFolder` handle (which the watcher
 /// would otherwise keep alive).
 fn signal_folder_changed(app: &mut App) {
-    let folder = app
-        .world()
-        .resource::<AssetServer>()
-        .load_folder("things");
+    let folder = app.world().resource::<AssetServer>().load_folder("things");
     let id = folder.id();
     app.world_mut()
         .resource_mut::<AssetFolderHandle<ThingId, Thing>>()
@@ -479,8 +484,16 @@ fn signal_without_changes_is_a_noop() {
         2,
         "a no-op signal must not change the entry count"
     );
-    assert_eq!(handle_id(&app, "alpha"), alpha_before, "alpha must not be re-keyed");
-    assert_eq!(handle_id(&app, "beta"), beta_before, "beta must not be re-keyed");
+    assert_eq!(
+        handle_id(&app, "alpha"),
+        alpha_before,
+        "alpha must not be re-keyed"
+    );
+    assert_eq!(
+        handle_id(&app, "beta"),
+        beta_before,
+        "beta must not be re-keyed"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

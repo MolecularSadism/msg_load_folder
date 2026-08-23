@@ -9,6 +9,14 @@
 //!
 //! Run with: `cargo run --example audio`
 
+// Bind `bevy` / `bevy_common_assets` to whichever major the active cargo
+// feature selects (see Cargo.toml); under the default `bevy_0_19` feature the
+// names already exist, so no alias is needed.
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy018 as bevy;
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy_common_assets018 as bevy_common_assets;
+
 use bevy::{asset::LoadState, log::LogPlugin, prelude::*};
 use bevy_common_assets::ron::RonAssetPlugin;
 use msg_load_folder::prelude::*;
@@ -69,7 +77,10 @@ fn main() {
             ..default()
         })
         // Register loaders for both extensions
-        .add_plugins(RonAssetPlugin::<SoundEffect>::new(&["sfx.ron", "sound.ron"]))
+        .add_plugins(RonAssetPlugin::<SoundEffect>::new(&[
+            "sfx.ron",
+            "sound.ron",
+        ]))
         // Load the sounds folder, accepting both .sfx.ron and .sound.ron files
         // This demonstrates the with_extension() builder pattern:
         .add_plugins(
@@ -111,7 +122,10 @@ fn display_sounds(
 
     for (id, handle) in sound_library.iter() {
         if let Some(sound) = sound_assets.get(handle) {
-            info!("Sound: {} | name: {} | volume: {}", id, sound.name, sound.volume);
+            info!(
+                "Sound: {} | name: {} | volume: {}",
+                id, sound.name, sound.volume
+            );
         }
     }
 
