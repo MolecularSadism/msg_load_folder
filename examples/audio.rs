@@ -69,7 +69,10 @@ fn main() {
             ..default()
         })
         // Register loaders for both extensions
-        .add_plugins(RonAssetPlugin::<SoundEffect>::new(&["sfx.ron", "sound.ron"]))
+        .add_plugins(RonAssetPlugin::<SoundEffect>::new(&[
+            "sfx.ron",
+            "sound.ron",
+        ]))
         // Load the sounds folder, accepting both .sfx.ron and .sound.ron files
         // This demonstrates the with_extension() builder pattern:
         .add_plugins(
@@ -111,7 +114,10 @@ fn display_sounds(
 
     for (id, handle) in sound_library.iter() {
         if let Some(sound) = sound_assets.get(handle) {
-            info!("Sound: {} | name: {} | volume: {}", id, sound.name, sound.volume);
+            info!(
+                "Sound: {} | name: {} | volume: {}",
+                id, sound.name, sound.volume
+            );
         }
     }
 

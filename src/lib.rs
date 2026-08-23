@@ -1,19 +1,22 @@
 #![doc = include_str!("../README.md")]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use bevy::asset::io::ErasedAssetReader;
-use bevy::asset::{AssetPath, LoadState, LoadedFolder};
+use bevy::asset::{
+    AssetPath, LoadState, LoadedFolder, RecursiveDependencyLoadState, UntypedHandle,
+};
 use bevy::prelude::*;
 use bevy::tasks::{IoTaskPool, Task, block_on, futures_lite::StreamExt, poll_once};
 
 pub mod prelude {
     pub use crate::{
-        AssetFolder, AssetFolderHandle, FolderLoaderPlugin, deserialize_optional_string,
-        id_from_filename, id_from_filename_with_extensions, is_hidden_file,
+        AssetFile, AssetFolder, AssetFolderHandle, FolderLoaderPlugin, LoadResource, LoadedFolders,
+        LoadedFoldersPlugin, ResourceHandles, deserialize_optional_string, id_from_filename,
+        id_from_filename_with_extensions, is_hidden_file,
     };
 }
 
@@ -569,9 +572,7 @@ fn apply_scan_results<Id, A>(
     Id: Clone + Copy + Eq + Hash + Send + Sync + Default + From<String> + std::fmt::Debug + 'static,
     A: Asset + Clone + Send + Sync + 'static,
 {
-    let source = AssetPath::parse(config.folder_path)
-        .source()
-        .clone_owned();
+    let source = AssetPath::parse(config.folder_path).source().clone_owned();
 
     let mut present: HashSet<Id> = HashSet::with_capacity(paths.len());
     for path in paths {
@@ -603,7 +604,11 @@ fn apply_scan_results<Id, A>(
                 LoadState::Loaded | LoadState::Failed(_)
             ) {
                 asset_server.reload(asset_path);
-                debug!("FolderLoader reloaded re-added {:?} ({})", id, path.display());
+                debug!(
+                    "FolderLoader reloaded re-added {:?} ({})",
+                    id,
+                    path.display()
+                );
             }
 
             library.insert(id, handle);
@@ -613,10 +618,7 @@ fn apply_scan_results<Id, A>(
 
     // Forget assets whose files were removed; dropping the handle lets Bevy
     // unload the underlying asset.
-    let removed: Vec<Id> = library
-        .keys()
-        .filter(|id| !present.contains(id))
-        .collect();
+    let removed: Vec<Id> = library.keys().filter(|id| !present.contains(id)).collect();
     for id in removed {
         library.assets_mut().remove(&id);
         debug!("FolderLoader removed {id:?} (file no longer present)");
@@ -633,6 +635,205 @@ fn filename_has_extension(path: &Path, file_extensions: &[&str]) -> bool {
         let name = name.to_string_lossy();
         file_extensions.iter().any(|ext| name.ends_with(ext))
     })
+}
+
+// =============================================================================
+// Folder Readiness Gate
+// =============================================================================
+
+/// Plugin registering the [`LoadedFolders`] readiness gate.
+///
+/// Watches [`AssetEvent<LoadedFolder>`] to discover every folder the app loads
+/// — whichever plugin or system started the load — and lets screens gate on
+/// [`LoadedFolders::all_ready`] with no per-loader wiring.
+///
+/// Idempotent: the plugin may be added from several places (it is not unique),
+/// and only the first add registers the resource and system.
+pub struct LoadedFoldersPlugin;
+
+impl Plugin for LoadedFoldersPlugin {
+    fn build(&self, app: &mut App) {
+        if app.world().contains_resource::<LoadedFolders>() {
+            return;
+        }
+        app.init_resource::<LoadedFolders>();
+        app.add_systems(PreUpdate, track_loaded_folders);
+    }
+
+    fn is_unique(&self) -> bool {
+        false
+    }
+}
+
+/// Every [`LoadedFolder`] the app has begun loading, discovered from asset
+/// events. Folders are added as their scans surface and stay tracked for the
+/// lifetime of the run.
+///
+/// Registered by [`LoadedFoldersPlugin`].
+#[derive(Resource, Default)]
+pub struct LoadedFolders {
+    seen: HashSet<AssetId<LoadedFolder>>,
+}
+
+impl LoadedFolders {
+    /// Returns `true` once at least one folder has been seen and every seen
+    /// folder has finished loading with all of its files. A folder whose load
+    /// failed counts as ready so a single broken file can't wedge the gate.
+    #[must_use]
+    pub fn all_ready(&self, asset_server: &AssetServer) -> bool {
+        !self.seen.is_empty() && self.seen.iter().all(|id| folder_settled(asset_server, *id))
+    }
+}
+
+/// Whether the folder has either loaded with all of its files or failed.
+fn folder_settled(asset_server: &AssetServer, id: AssetId<LoadedFolder>) -> bool {
+    asset_server.is_loaded_with_dependencies(id)
+        || matches!(
+            asset_server.get_recursive_dependency_load_state(id),
+            Some(RecursiveDependencyLoadState::Failed(_))
+        )
+}
+
+/// Records every folder the app starts loading into [`LoadedFolders`].
+fn track_loaded_folders(
+    mut events: MessageReader<AssetEvent<LoadedFolder>>,
+    mut folders: ResMut<LoadedFolders>,
+) {
+    for event in events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => {
+                folders.seen.insert(*id);
+            }
+            _ => {}
+        }
+    }
+}
+
+// =============================================================================
+// Asset-Backed Resources (LoadResource)
+// =============================================================================
+
+/// Loading a resource through the asset pipeline, so it exists only once its
+/// assets do.
+///
+/// [`LoadResource::load_resource`] takes a type that is both `Resource` and
+/// `Asset`, builds it via `FromWorld` (which is where its handles are
+/// requested), and parks it in [`ResourceHandles`]. A `PreUpdate` system
+/// inserts it as a resource once the asset server reports the whole dependency
+/// tree loaded — so any system that can see the resource can also use its
+/// handles.
+pub trait LoadResource {
+    /// Queue `T` to be inserted as a resource once all of its asset
+    /// dependencies have loaded. This ensures the resource only exists when
+    /// its assets are ready.
+    ///
+    /// Call this **at plugin-build time**, once per `T`:
+    ///
+    /// - Deferring the call to a startup system leaves [`ResourceHandles`]
+    ///   empty on early frames, making [`ResourceHandles::is_all_done`]
+    ///   vacuously `true` before loading has even been requested — screens
+    ///   gating on it would let the app through unloaded.
+    /// - A second call for the same `T` queues a second `FromWorld` value that
+    ///   overwrites the first on insert; the internal `init_asset` is guarded,
+    ///   so the duplicate no longer dangles existing handles of `T`, but the
+    ///   double registration is still a logic error.
+    ///
+    /// # Panics
+    ///
+    /// Panics at plugin-build time when the [`AssetServer`] is missing (add
+    /// `AssetPlugin` first), aborting startup rather than degrading.
+    fn load_resource<T: Resource + Asset + Clone + FromWorld>(&mut self) -> &mut Self;
+}
+
+impl LoadResource for App {
+    fn load_resource<T: Resource + Asset + Clone + FromWorld>(&mut self) -> &mut Self {
+        // One-time infrastructure setup, guarded so any number of
+        // `load_resource` calls share one registry and one drain system.
+        if !self.world().contains_resource::<ResourceHandles>() {
+            self.init_resource::<ResourceHandles>();
+            self.add_systems(PreUpdate, load_resource_assets);
+        }
+
+        // Initialize the asset storage only once per `T`: `init_asset` is NOT
+        // idempotent (see the identical guard in `FolderLoaderPlugin::build`) —
+        // an unconditional second call would replace `Assets<T>` and silently
+        // dangle every existing handle of `T`.
+        if !self.world().contains_resource::<Assets<T>>() {
+            self.init_asset::<T>();
+        }
+
+        let world = self.world_mut();
+        let value = T::from_world(world);
+        let assets = world.resource::<AssetServer>();
+        let handle = assets.add(value);
+        let mut handles = world.resource_mut::<ResourceHandles>();
+        handles
+            .waiting
+            .push_back((handle.untyped(), |world, handle| {
+                let Some(assets) = world.get_resource::<Assets<T>>() else {
+                    return;
+                };
+                if let Some(value) = assets.get(handle.id().typed::<T>()) {
+                    world.insert_resource(value.clone());
+                }
+            }));
+        self
+    }
+}
+
+/// A function that inserts a loaded resource.
+type InsertLoadedResource = fn(&mut World, &UntypedHandle);
+
+/// Registry of asset-backed resources queued by
+/// [`LoadResource::load_resource`], tracking which are still waiting on their
+/// asset dependencies.
+///
+/// Loading screens gate on [`ResourceHandles::is_all_done`].
+#[derive(Resource, Default)]
+pub struct ResourceHandles {
+    // Use a queue for waiting assets so they can be cycled through and moved to
+    // `finished` one at a time.
+    waiting: VecDeque<(UntypedHandle, InsertLoadedResource)>,
+    finished: Vec<UntypedHandle>,
+}
+
+impl ResourceHandles {
+    /// Returns true if all requested [`Asset`]s have finished loading and are
+    /// available as [`Resource`]s.
+    ///
+    /// Note this is vacuously `true` while nothing has been queued — which is
+    /// why [`LoadResource::load_resource`] must be called at plugin-build time
+    /// rather than from a startup system.
+    #[must_use]
+    pub fn is_all_done(&self) -> bool {
+        self.waiting.is_empty()
+    }
+}
+
+/// Moves queued resources whose dependency trees have loaded into the world.
+fn load_resource_assets(world: &mut World) {
+    world.resource_scope(|world, mut resource_handles: Mut<ResourceHandles>| {
+        world.resource_scope(|world, assets: Mut<AssetServer>| {
+            for _ in 0..resource_handles.waiting.len() {
+                let (handle, insert_fn) = resource_handles.waiting.pop_front().unwrap();
+                if assets.is_loaded_with_dependencies(&handle) {
+                    insert_fn(world, &handle);
+                    resource_handles.finished.push(handle);
+                } else {
+                    resource_handles.waiting.push_back((handle, insert_fn));
+                }
+            }
+        });
+    });
+}
+
+/// A config type that knows the asset path it was loaded from, so hot-reload
+/// and error messages can name the file without a lookup table.
+pub trait AssetFile {
+    /// The asset path this value was loaded from.
+    fn get_path(&self) -> &str;
 }
 
 // =============================================================================
@@ -972,7 +1173,6 @@ mod tests {
         assert!(!library.contains_key(&MockId(2)));
     }
 
-
     #[test]
     fn test_asset_folder_handle_default() {
         #[derive(Asset, Clone, Reflect, Default)]
@@ -1019,8 +1219,7 @@ mod tests {
     #[test]
     fn test_id_from_filename_with_extensions_first_match() {
         let path = Path::new("explosion.ogg");
-        let id: Option<MockId> =
-            id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
+        let id: Option<MockId> = id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
         assert!(id.is_some());
         assert_eq!(id.unwrap(), MockId(9)); // "explosion"
     }
@@ -1028,8 +1227,7 @@ mod tests {
     #[test]
     fn test_id_from_filename_with_extensions_second_match() {
         let path = Path::new("ambient.wav");
-        let id: Option<MockId> =
-            id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
+        let id: Option<MockId> = id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
         assert!(id.is_some());
         assert_eq!(id.unwrap(), MockId(7)); // "ambient"
     }
@@ -1037,24 +1235,21 @@ mod tests {
     #[test]
     fn test_id_from_filename_with_extensions_no_match() {
         let path = Path::new("music.flac");
-        let id: Option<MockId> =
-            id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
+        let id: Option<MockId> = id_from_filename_with_extensions(path, &[".ogg", ".wav", ".mp3"]);
         assert!(id.is_none());
     }
 
     #[test]
     fn test_id_from_filename_with_extensions_hidden() {
         let path = Path::new(".hidden.ogg");
-        let id: Option<MockId> =
-            id_from_filename_with_extensions(path, &[".ogg", ".wav"]);
+        let id: Option<MockId> = id_from_filename_with_extensions(path, &[".ogg", ".wav"]);
         assert!(id.is_none());
     }
 
     #[test]
     fn test_id_from_filename_with_extensions_disabled() {
         let path = Path::new("_disabled.wav");
-        let id: Option<MockId> =
-            id_from_filename_with_extensions(path, &[".ogg", ".wav"]);
+        let id: Option<MockId> = id_from_filename_with_extensions(path, &[".ogg", ".wav"]);
         assert!(id.is_none());
     }
 
@@ -1062,8 +1257,7 @@ mod tests {
     fn test_id_from_filename_with_extensions_single() {
         // Single extension behaves like id_from_filename_with_extension
         let path = Path::new("fireball.spell.ron");
-        let id: Option<MockId> =
-            id_from_filename_with_extensions(path, &[".spell.ron"]);
+        let id: Option<MockId> = id_from_filename_with_extensions(path, &[".spell.ron"]);
         assert!(id.is_some());
         assert_eq!(id.unwrap(), MockId(8)); // "fireball"
     }
@@ -1094,7 +1288,10 @@ mod tests {
             &[".spell.ron"]
         ));
         assert!(!filename_has_extension(Path::new("music.flac"), &[".ogg"]));
-        assert!(!filename_has_extension(Path::new("no_extension"), &[".ron"]));
+        assert!(!filename_has_extension(
+            Path::new("no_extension"),
+            &[".ron"]
+        ));
     }
 
     #[test]
@@ -1111,10 +1308,8 @@ mod tests {
         ));
 
         // ...and the authoritative filter rejects them.
-        let disabled: Option<MockId> = id_from_filename_with_extensions(
-            Path::new("_disabled.spell.ron"),
-            &[".spell.ron"],
-        );
+        let disabled: Option<MockId> =
+            id_from_filename_with_extensions(Path::new("_disabled.spell.ron"), &[".spell.ron"]);
         assert!(disabled.is_none());
     }
 
@@ -1209,8 +1404,14 @@ mod tests {
         assert_eq!(assets.get(&handle).unwrap().value, 42);
 
         // Both loaders' per-Id resources must still be present and independent.
-        assert!(app.world().contains_resource::<AssetFolder<IdA, SharedAsset>>());
-        assert!(app.world().contains_resource::<AssetFolder<IdB, SharedAsset>>());
+        assert!(
+            app.world()
+                .contains_resource::<AssetFolder<IdA, SharedAsset>>()
+        );
+        assert!(
+            app.world()
+                .contains_resource::<AssetFolder<IdB, SharedAsset>>()
+        );
     }
 
     // ==========================================================================
@@ -1271,10 +1472,16 @@ mod tests {
         struct MockAsset;
 
         let mut app = App::new();
-        assert!(!app.world().contains_resource::<AssetFolder<Id, MockAsset>>());
+        assert!(
+            !app.world()
+                .contains_resource::<AssetFolder<Id, MockAsset>>()
+        );
 
         app.init_resource::<AssetFolder<Id, MockAsset>>();
-        assert!(app.world().contains_resource::<AssetFolder<Id, MockAsset>>());
+        assert!(
+            app.world()
+                .contains_resource::<AssetFolder<Id, MockAsset>>()
+        );
 
         // Mutable resource access works.
         app.world_mut()
