@@ -39,7 +39,10 @@ impl From<String> for ThingId {
 fn unique_asset_root() -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("msg_load_folder_it_{}_{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "msg_load_folder_it_{}_{n}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("create temp asset root");
     dir
 }
@@ -174,7 +177,9 @@ fn all_valid_files_load() {
     assert_eq!(loaded_value(&app, "one"), Some(10));
     assert_eq!(loaded_value(&app, "two"), Some(20));
     assert_eq!(
-        app.world().resource::<AssetFolder<ThingId, Thing>>().len(),
+        app.world()
+            .resource::<AssetFolder<ThingId, Thing>>()
+            .len(),
         2
     );
 

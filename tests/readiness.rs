@@ -21,6 +21,15 @@ struct Thing {
     value: i32,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+struct ThingId(u64);
+
+impl From<String> for ThingId {
+    fn from(s: String) -> Self {
+        ThingId(s.len() as u64)
+    }
+}
+
 /// An asset-backed resource: `FromWorld` is where its handles would be
 /// requested in real use.
 #[derive(Resource, Asset, Clone, Reflect)]
@@ -31,6 +40,24 @@ struct TestConfig {
 impl FromWorld for TestConfig {
     fn from_world(_world: &mut World) -> Self {
         Self { value: 7 }
+    }
+}
+
+/// An asset-backed resource whose dependency tree can never load: its
+/// `FromWorld` requests a path that does not exist.
+#[derive(Resource, Asset, Clone, Reflect)]
+struct BrokenConfig {
+    #[dependency]
+    missing: Handle<Thing>,
+}
+
+impl FromWorld for BrokenConfig {
+    fn from_world(world: &mut World) -> Self {
+        Self {
+            missing: world
+                .resource::<AssetServer>()
+                .load("missing/nowhere.thing.ron"),
+        }
     }
 }
 
@@ -127,29 +154,130 @@ fn gate_opens_once_folders_finish_loading() {
     );
 }
 
-/// A seen folder whose load failed counts as settled so a broken folder can't
-/// wedge the gate forever.
+/// A folder whose load fails wholesale must still be discovered and settle
+/// the gate.
 ///
-/// A folder that fails wholesale never emits an `Added` event (Bevy fails the
-/// `LoadedFolder` as a unit), so the discovery event is written manually here
-/// to put the folder into the gate's seen set — the state a folder that was
-/// discovered and later failed ends up in.
+/// Bevy fails a `LoadedFolder` as a unit: a single broken file means the
+/// folder asset is never inserted, so no `Added` event ever fires — the
+/// failure must be discovered from `AssetLoadFailedEvent<LoadedFolder>`.
 #[test]
-fn failed_seen_folder_counts_as_ready() {
+fn failed_folder_load_is_discovered_and_counts_as_ready() {
     let root = unique_asset_root();
     write(&root, "things/broken.thing.ron", "this is { not valid ron");
     let mut app = build_app(&root);
 
     let handle = app.world().resource::<AssetServer>().load_folder("things");
-    let id = handle.id();
     app.insert_resource(KeepFolder(handle));
-    app.world_mut()
-        .resource_mut::<Messages<AssetEvent<LoadedFolder>>>()
-        .write(AssetEvent::Added { id });
 
     assert!(
         run_until(&mut app, 500, all_ready),
-        "a seen folder whose load failed must still settle the gate"
+        "a folder whose load failed must still be discovered and settle the gate"
+    );
+}
+
+/// Watching folders at load start closes the gate immediately and holds it
+/// closed until *every* watched folder settles — the first folder finishing
+/// early must not open the gate while a larger one is still loading.
+#[test]
+fn gate_stays_closed_until_every_watched_folder_settles() {
+    let root = unique_asset_root();
+    write(&root, "small/only.thing.ron", "(value: 1)");
+    for i in 0..40 {
+        write(
+            &root,
+            &format!("large/file_{i}.thing.ron"),
+            &format!("(value: {i})"),
+        );
+    }
+    let mut app = build_app(&root);
+
+    let small = app.world().resource::<AssetServer>().load_folder("small");
+    let large = app.world().resource::<AssetServer>().load_folder("large");
+    let (small_id, large_id) = (small.id(), large.id());
+    {
+        let mut folders = app.world_mut().resource_mut::<LoadedFolders>();
+        folders.watch(small);
+        folders.watch(large);
+    }
+    assert_eq!(app.world().resource::<LoadedFolders>().seen_count(), 2);
+
+    // Watched folders are known before anything finishes loading.
+    assert!(
+        !all_ready(&app),
+        "watched folders must hold the gate closed from load start"
+    );
+
+    // At every point in time the gate must be open exactly when both folders
+    // have settled — never after just the first (smaller) one.
+    for _ in 0..500 {
+        app.update();
+        let server = app.world().resource::<AssetServer>();
+        let both_settled = server.is_loaded_with_dependencies(small_id)
+            && server.is_loaded_with_dependencies(large_id);
+        assert_eq!(
+            all_ready(&app),
+            both_settled,
+            "gate must open exactly when every watched folder has settled"
+        );
+        if both_settled {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("watched folders never finished loading");
+}
+
+/// Dropping every handle to a passively-discovered folder releases the asset;
+/// the gate must treat the released folder as settled instead of wedging.
+#[test]
+fn dropping_a_discovered_folder_handle_does_not_wedge_the_gate() {
+    let root = unique_asset_root();
+    write(&root, "things/alpha.thing.ron", "(value: 1)");
+    let mut app = build_app(&root);
+
+    let handle = app.world().resource::<AssetServer>().load_folder("things");
+    app.insert_resource(KeepFolder(handle));
+    assert!(run_until(&mut app, 500, all_ready), "folder should load");
+
+    // Drop the only strong handle; the asset server releases the folder.
+    app.world_mut().remove_resource::<KeepFolder>();
+    for _ in 0..50 {
+        app.update();
+        assert!(
+            all_ready(&app),
+            "a released folder must count as settled, not wedge the gate"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// With asset watching disabled (the release-build default),
+/// `FolderLoaderPlugin` must still register its folder with the gate so
+/// `all_ready` becomes meaningful instead of holding closed forever.
+#[test]
+fn folder_loader_plugin_registers_with_the_gate_without_watching() {
+    let root = unique_asset_root();
+    write(&root, "things/alpha.thing.ron", "(value: 1)");
+    let mut app = build_app(&root);
+    app.add_plugins(FolderLoaderPlugin::<ThingId, Thing>::new(
+        "things",
+        ".thing.ron",
+    ));
+
+    assert!(
+        run_until(&mut app, 500, |app| {
+            all_ready(app)
+                && app
+                    .world()
+                    .resource::<AssetFolderHandle<ThingId, Thing>>()
+                    .is_loaded()
+        }),
+        "the loader's folder must register with and open the gate even without watching"
+    );
+    assert_eq!(
+        app.world().resource::<AssetFolder<ThingId, Thing>>().len(),
+        1,
+        "per-file loading must keep working alongside the gate registration"
     );
 }
 
@@ -213,4 +341,35 @@ fn repeated_load_resource_does_not_wipe_asset_storage() {
         "a second load_resource for the same type wiped Assets<T>"
     );
     assert_eq!(assets.get(&handle).unwrap().value, 42);
+}
+
+/// A resource whose dependency tree fails must be written off (with an error
+/// log) rather than requeued forever: `is_all_done` still settles, and the
+/// resource is never inserted.
+#[test]
+fn failed_resource_dependency_counts_as_done_without_inserting() {
+    let root = unique_asset_root();
+    let mut app = build_app(&root);
+    app.load_resource::<BrokenConfig>();
+
+    assert!(
+        !app.world().resource::<ResourceHandles>().is_all_done(),
+        "the registry must be pending while the dependency is in flight"
+    );
+
+    assert!(
+        run_until(&mut app, 500, |app| {
+            app.world().resource::<ResourceHandles>().is_all_done()
+        }),
+        "a failed dependency tree must count as done instead of requeueing forever"
+    );
+    assert!(
+        !app.world().contains_resource::<BrokenConfig>(),
+        "a resource whose dependencies failed must not be inserted"
+    );
+    assert_eq!(app.world().resource::<ResourceHandles>().pending_count(), 0);
+    assert_eq!(
+        app.world().resource::<ResourceHandles>().finished_count(),
+        1
+    );
 }
