@@ -14,6 +14,14 @@
 //!
 //! Run with: `cargo run --example ron`
 
+// Bind `bevy` / `bevy_common_assets` to whichever major the active cargo
+// feature selects (see Cargo.toml); under the default `bevy_0_19` feature the
+// names already exist, so no alias is needed.
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy018 as bevy;
+#[cfg(feature = "bevy_0_18")]
+extern crate bevy_common_assets018 as bevy_common_assets;
+
 use bevy::{asset::LoadState, log::LogPlugin, prelude::*};
 use bevy_common_assets::ron::RonAssetPlugin;
 use msg_load_folder::prelude::*;

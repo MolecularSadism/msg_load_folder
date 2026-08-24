@@ -10,27 +10,63 @@ keywords = ["bevy", "gamedev", "assets", "loading", "ecs"]
 categories = ["game-development", "filesystem"]
 readme = "README.md"
 
+# One crate, two Bevy majors: exactly one of the mutually exclusive
+# `bevy_0_19` (default) / `bevy_0_18` features must be enabled, each activating
+# its own package-renamed Bevy dependency. With `bevy_0_18` active, no Bevy
+# 0.19 crate is compiled anywhere in the build graph (and vice versa), so
+# consumers pinned to a toolchain that only builds one major stay unaffected
+# by the other.
+#
+# The 0.19 dependency keeps the literal manifest key `bevy` on purpose: Bevy's
+# derive macros (`Asset`, `Resource`, `Reflect`, ...) resolve the engine crate
+# by manifest *key*, so a key literally named `bevy` makes both majors' derives
+# emit `bevy::...` paths. `src/lib.rs` then binds that name to the active
+# major with a cfg'd `extern crate ... as bevy` alias.
+
 [dependencies]
-bevy = { version = "0.19", default-features = false, features = [
+bevy = { version = "0.19", optional = true, default-features = false, features = [
     "bevy_asset",
     "bevy_log",
     "bevy_image",
     "bevy_sprite",
     "bevy_ui",
-] }
-serde = { version = "1.0", features = ["derive"] }
-
-[dev-dependencies]
-bevy = { version = "0.19", default-features = false, features = [
-    "bevy_asset",
-    "bevy_log",
+    # Task-pool support: the folder loader scans directories on the
+    # `IoTaskPool`, and the integration tests drive a real `AssetServer`.
+    # Games enable these through Bevy's default features anyway, so feature
+    # unification makes this a no-op for typical consumers.
     "std",
     "multi_threaded",
-    # Real OS-level asset watching, exercised by the (ignored) end-to-end test
-    # in `tests/file_watcher.rs`.
-    "file_watcher",
 ] }
-bevy_common_assets = { version = "0.17.0", features = ["ron"] }
+bevy018 = { package = "bevy", version = "0.18", optional = true, default-features = false, features = [
+    "bevy_asset",
+    "bevy_log",
+    "bevy_image",
+    "bevy_sprite",
+    "bevy_ui",
+    "std",
+    "multi_threaded",
+] }
+serde = { version = "1.0", features = ["derive"] }
+# RON asset loading, used by this crate's examples and integration tests.
+# Optional dependencies cannot live in [dev-dependencies], so these ride the
+# version features; each major maps to the bevy_common_assets release built
+# against that Bevy version.
+bevy_common_assets = { version = "0.17.0", features = ["ron"], optional = true }
+bevy_common_assets018 = { package = "bevy_common_assets", version = "0.15.0", features = [
+    "ron",
+], optional = true }
+
+[features]
+default = ["bevy_0_19"]
+# Build against Bevy 0.19. Mutually exclusive with `bevy_0_18`.
+bevy_0_19 = ["dep:bevy", "dep:bevy_common_assets"]
+# Build against Bevy 0.18 (requires `default-features = false`). Mutually
+# exclusive with `bevy_0_19`.
+bevy_0_18 = ["dep:bevy018", "dep:bevy_common_assets018"]
+# Real OS-level asset watching for whichever Bevy major is active. Needed at
+# runtime by the (ignored) end-to-end test in `tests/file_watcher.rs`; games
+# usually enable Bevy's `file_watcher` feature themselves instead.
+file_watcher = ["bevy?/file_watcher", "bevy018?/file_watcher"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

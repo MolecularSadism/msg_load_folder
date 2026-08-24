@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # One job per supported Bevy major: the features are mutually exclusive, so
+  # each configuration is built, linted and tested in isolation. `bevy_0_19`
+  # is the default feature; `bevy_0_18` is selected with default features off.
+  check:
+    name: clippy + test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: bevy_0_19
+            flags: ""
+          - name: bevy_0_18
+            flags: --no-default-features --features bevy_0_18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - name: Install Bevy Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+      - name: Clippy
+        run: cargo clippy --all-targets ${{ matrix.flags }} -- -D warnings
+      - name: Test
+        run: cargo test ${{ matrix.flags }}
