@@ -56,10 +56,10 @@ use bevy::tasks::{IoTaskPool, Task, block_on, futures_lite::StreamExt, poll_once
 
 pub mod prelude {
     pub use crate::{
-        AssetFile, AssetFolder, AssetFolderHandle, FolderLoaderPlugin, LoadResource, LoadedFolders,
-        LoadedFoldersPlugin, ResourceHandles, all_folders_ready, all_resources_loaded,
-        deserialize_optional_string, id_from_filename, id_from_filename_with_extensions,
-        is_hidden_file,
+        AssetFile, AssetFolder, AssetFolderHandle, ExternalWatchId, FolderLoaderPlugin,
+        LoadResource, LoadedFolders, LoadedFoldersPlugin, ResourceHandles, all_folders_ready,
+        all_resources_loaded, deserialize_optional_string, id_from_filename,
+        id_from_filename_with_extensions, is_hidden_file,
     };
 }
 
@@ -239,6 +239,11 @@ pub struct AssetFolderHandle<Id: Send + Sync + 'static, A: Send + Sync + 'static
     pub handle: Option<Handle<LoadedFolder>>,
     /// Whether the folder has been scanned and its assets registered at least once.
     initial_load_complete: bool,
+    /// Readiness-gate token from [`LoadedFolders::watch_external`], reported
+    /// via [`LoadedFolders::mark_external_ready`] once `initial_load_complete`
+    /// flips true.
+    #[reflect(ignore)]
+    external_watch: Option<ExternalWatchId>,
     #[reflect(ignore)]
     _marker: PhantomData<(Id, A)>,
 }
@@ -256,6 +261,7 @@ impl<Id: Send + Sync + 'static, A: Send + Sync + 'static> AssetFolderHandle<Id, 
         Self {
             handle: None,
             initial_load_complete: false,
+            external_watch: None,
             _marker: PhantomData,
         }
     }
@@ -467,11 +473,19 @@ where
 /// Each frame it:
 /// 1. Performs one-time setup: requests an initial scan and, when asset
 ///    watching is enabled, starts a [`LoadedFolder`] load whose change events
-///    drive hot reloading. When the [`LoadedFolders`] gate is present, the
-///    folder load is started in all builds — watching or not — and registered
-///    via [`LoadedFolders::watch`], so the gate composes with this loader
-///    everywhere (a gate that only saw folders in dev builds would hold a
-///    release build's loading screen closed forever).
+///    drive hot reloading. When the [`LoadedFolders`] gate is present, this
+///    loader registers with it via [`LoadedFolders::watch_external`] rather
+///    than [`LoadedFolders::watch`] — the gate is held closed until *this
+///    system's own* scan (step 4) reports done, not until Bevy considers the
+///    untyped [`LoadedFolder`] handle's recursive dependency tree loaded.
+///    The two do not always agree: some asset types' recursive dependency
+///    state never settles when requested through the generic, untyped
+///    `load_folder` path in every environment (observed with decoded audio
+///    samples on a machine with no audio device) even though the same files
+///    load fine when requested by their concrete type, which is what the
+///    per-file scan below does. Gating on this loader's own signal keeps the
+///    gate meaningful in all builds — watching or not — without depending on
+///    that path settling.
 /// 2. Reacts to [`AssetEvent<LoadedFolder>`]s (files added/removed/moved) by
 ///    requesting a rescan.
 /// 3. Spawns an asynchronous directory scan when one is requested.
@@ -496,20 +510,19 @@ fn load_assets_from_folder<Id, A>(
 {
     // 1. One-time setup: request the initial scan and, when watching is on,
     //    keep a folder handle alive so Bevy notifies us of structural changes.
-    //    When the readiness gate is in use the folder is loaded and watched in
-    //    all builds, so the gate stays meaningful with watching disabled.
+    //    When the readiness gate is in use, register with it via our own
+    //    scan-completion signal (step 4) regardless of watching, so the gate
+    //    stays meaningful in every build without depending on the untyped
+    //    LoadedFolder handle's recursive dependency state settling.
     if !scan_state.initialized {
         scan_state.initialized = true;
         scan_state.rescan_requested = true;
         let watching = asset_server.watching_for_changes();
-        if watching || gate.is_some() {
-            let handle = asset_server.load_folder(config.folder_path);
-            if let Some(gate) = gate.as_mut() {
-                gate.watch(handle.clone());
-            }
-            if watching {
-                folder_handle.handle = Some(handle);
-            }
+        if watching {
+            folder_handle.handle = Some(asset_server.load_folder(config.folder_path));
+        }
+        if let Some(gate) = gate.as_mut() {
+            folder_handle.external_watch = Some(gate.watch_external());
         }
     }
 
@@ -547,6 +560,9 @@ fn load_assets_from_folder<Id, A>(
         apply_scan_results(&asset_server, &config, &mut library, paths);
         if !folder_handle.initial_load_complete {
             folder_handle.initial_load_complete = true;
+            if let (Some(gate), Some(token)) = (gate.as_mut(), folder_handle.external_watch) {
+                gate.mark_external_ready(token);
+            }
             info!(
                 "Loaded {} asset(s) from folder '{}'",
                 library.len(),
@@ -718,7 +734,9 @@ fn filename_has_extension(path: &Path, file_extensions: &[&str]) -> bool {
 ///
 /// Every [`FolderLoaderPlugin`] registers its folder with the gate
 /// automatically when this plugin is present, in all builds — with or without
-/// asset watching.
+/// asset watching — via [`LoadedFolders::watch_external`], gated on the
+/// loader's own scan-completion rather than the folder's recursive dependency
+/// state.
 ///
 /// Idempotent: the plugin may be added from several places (it is not unique),
 /// and only the first add registers the resource and system.
@@ -739,8 +757,9 @@ impl Plugin for LoadedFoldersPlugin {
 }
 
 /// Every [`LoadedFolder`] the app is known to load — registered explicitly via
-/// [`Self::watch`] or discovered passively from asset events. Folders stay
-/// tracked for the lifetime of the run.
+/// [`Self::watch`] or discovered passively from asset events — plus every
+/// external readiness source registered via [`Self::watch_external`]. Folders
+/// and external sources stay tracked for the lifetime of the run.
 ///
 /// Registered by [`LoadedFoldersPlugin`].
 #[derive(Resource, Default)]
@@ -749,7 +768,18 @@ pub struct LoadedFolders {
     /// Strong handles for watched folders, kept alive so a watched folder can
     /// never be released out from under the gate.
     watched: Vec<Handle<LoadedFolder>>,
+    /// Readiness sources tracked by caller-reported completion (via
+    /// [`Self::mark_external_ready`]) rather than an `AssetId<LoadedFolder>`'s
+    /// recursive dependency state.
+    external: HashMap<ExternalWatchId, bool>,
+    next_external_id: u32,
 }
+
+/// Opaque token for an external readiness source registered with
+/// [`LoadedFolders::watch_external`]. Hold it until the matching
+/// [`LoadedFolders::mark_external_ready`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExternalWatchId(u32);
 
 impl LoadedFolders {
     /// Registers a folder with the gate the moment its load starts.
@@ -781,8 +811,38 @@ impl LoadedFolders {
         }
     }
 
-    /// Returns `true` once at least one folder is known and every known folder
-    /// has settled: loaded with all of its files, failed, or been released.
+    /// Registers an external readiness source, holding the gate closed from
+    /// this call until the matching [`Self::mark_external_ready`].
+    ///
+    /// Prefer this over [`Self::watch`] when a folder's completion is already
+    /// tracked reliably by some other mechanism — [`FolderLoaderPlugin`] uses
+    /// it for exactly this reason — rather than through an
+    /// `AssetId<LoadedFolder>`'s recursive dependency state. That state does
+    /// not settle for every asset type in every environment: decoded audio
+    /// samples loaded generically via [`AssetServer::load_folder`] have been
+    /// observed to sit in `Loading` forever on a machine with no audio
+    /// device, even though the same files load fine when requested by their
+    /// concrete type.
+    #[must_use]
+    pub fn watch_external(&mut self) -> ExternalWatchId {
+        let id = ExternalWatchId(self.next_external_id);
+        self.next_external_id += 1;
+        self.external.insert(id, false);
+        id
+    }
+
+    /// Marks an external readiness source (from [`Self::watch_external`]) as
+    /// ready. A no-op for an id this gate never issued, or one already marked
+    /// ready.
+    pub fn mark_external_ready(&mut self, id: ExternalWatchId) {
+        if let Some(ready) = self.external.get_mut(&id) {
+            *ready = true;
+        }
+    }
+
+    /// Returns `true` once at least one folder or external source is known
+    /// and everything known has settled: a folder loaded with all of its
+    /// files, failed, or released; an external source marked ready.
     ///
     /// A folder whose load failed counts as settled so a single broken file
     /// can't wedge the gate, and a folder whose handles were all dropped
@@ -790,13 +850,18 @@ impl LoadedFolders {
     /// it (this can only happen to passively-discovered folders; watched ones
     /// are kept alive by the gate).
     ///
-    /// The answer is only meaningful once every `load_folder` call has been
-    /// issued: folders the gate does not yet know about cannot hold it closed.
-    /// Register folders with [`Self::watch`] at load start for deterministic
-    /// gating, or use the [`all_folders_ready`] run condition.
+    /// The answer is only meaningful once every `load_folder` call and
+    /// [`Self::watch_external`] registration has been issued: sources the
+    /// gate does not yet know about cannot hold it closed. Register folders
+    /// with [`Self::watch`] (or an external source with [`Self::watch_external`])
+    /// at load start for deterministic gating, or use the
+    /// [`all_folders_ready`] run condition.
     #[must_use]
     pub fn all_ready(&self, asset_server: &AssetServer) -> bool {
-        !self.seen.is_empty() && self.seen.iter().all(|id| folder_settled(asset_server, *id))
+        let anything_registered = !self.seen.is_empty() || !self.external.is_empty();
+        anything_registered
+            && self.seen.iter().all(|id| folder_settled(asset_server, *id))
+            && self.external.values().all(|&ready| ready)
     }
 
     /// Number of folders known to the gate (watched or discovered).
@@ -813,6 +878,21 @@ impl LoadedFolders {
             .iter()
             .filter(|id| folder_settled(asset_server, **id))
             .count()
+    }
+
+    /// Number of external readiness sources registered via
+    /// [`Self::watch_external`], for loading-progress displays alongside
+    /// [`Self::external_ready_count`].
+    #[must_use]
+    pub fn external_count(&self) -> usize {
+        self.external.len()
+    }
+
+    /// Number of external readiness sources marked ready, alongside
+    /// [`Self::external_count`].
+    #[must_use]
+    pub fn external_ready_count(&self) -> usize {
+        self.external.values().filter(|&&ready| ready).count()
     }
 }
 
