@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`FolderLoaderPlugin` no longer registers with the `LoadedFolders` gate via
+  the untyped `LoadedFolder` handle's recursive dependency state.** That state
+  does not settle for every asset type in every environment — decoded audio
+  samples loaded generically via `AssetServer::load_folder` have been observed
+  to sit in `Loading` forever on a machine with no audio device, even though
+  the same files load fine when `FolderLoaderPlugin`'s own per-file scan
+  requests them by their concrete type. The gate now holds closed until that
+  per-file scan itself reports done, via two new `LoadedFolders` methods:
+  `watch_external` (returns an `ExternalWatchId`, registered the moment a
+  loader starts) and `mark_external_ready` (called once its own scan
+  completes), with `external_count`/`external_ready_count` alongside the
+  existing `seen_count`/`settled_count` for progress displays. `LoadedFolders::watch`
+  is unchanged and still the right choice for a folder loaded directly via
+  `AssetServer::load_folder` with no `FolderLoaderPlugin` in front of it.
+
 ### Added
 
 - **Dual Bevy support: 0.18 and 0.19 from one branch.** The Bevy major is now

@@ -289,6 +289,97 @@ fn folder_loader_plugin_registers_with_the_gate_without_watching() {
     );
 }
 
+/// `FolderLoaderPlugin` must hold the gate via [`LoadedFolders::watch_external`]
+/// rather than [`LoadedFolders::watch`] — its own per-file scan is what
+/// settles readiness, never the untyped `LoadedFolder` handle's recursive
+/// dependency state. That state has been observed to never settle for some
+/// asset types (decoded audio, no audio device) even though the concrete
+/// per-file loads this plugin does complete fine, so the gate must not depend
+/// on it.
+#[test]
+fn folder_loader_plugin_uses_external_watch_not_seen() {
+    let root = unique_asset_root();
+    write(&root, "things/alpha.thing.ron", "(value: 1)");
+    let mut app = build_app(&root);
+    app.add_plugins(FolderLoaderPlugin::<ThingId, Thing>::new(
+        "things",
+        ".thing.ron",
+    ));
+
+    assert!(
+        run_until(&mut app, 500, |app| {
+            app.world()
+                .resource::<AssetFolderHandle<ThingId, Thing>>()
+                .is_loaded()
+        }),
+        "the loader should finish its own scan"
+    );
+    let gate = app.world().resource::<LoadedFolders>();
+    assert_eq!(
+        gate.external_count(),
+        1,
+        "the loader must register exactly one external readiness source"
+    );
+    assert_eq!(
+        gate.external_ready_count(),
+        1,
+        "the external source must be marked ready once the loader's own scan completes"
+    );
+    assert_eq!(
+        gate.seen_count(),
+        0,
+        "the loader must not also register via the AssetId<LoadedFolder>-based path"
+    );
+}
+
+/// Direct API coverage for [`LoadedFolders::watch_external`]: the gate holds
+/// closed from registration until the matching
+/// [`LoadedFolders::mark_external_ready`], independent of any
+/// `AssetId<LoadedFolder>` — and mixes correctly with a `watch`ed folder that
+/// settles through the ordinary path.
+#[test]
+fn external_watch_holds_the_gate_closed_until_marked_ready() {
+    let root = unique_asset_root();
+    write(&root, "things/alpha.thing.ron", "(value: 1)");
+    let mut app = build_app(&root);
+
+    let handle = app.world().resource::<AssetServer>().load_folder("things");
+    let token = {
+        let mut gate = app.world_mut().resource_mut::<LoadedFolders>();
+        gate.watch(handle.clone());
+        gate.watch_external()
+    };
+    app.insert_resource(KeepFolder(handle));
+
+    // Both the watched folder and the external source must settle before the
+    // gate opens — reaching the folder's own completion first must not open
+    // it while the external source is still pending.
+    for _ in 0..200 {
+        app.update();
+        assert!(
+            !all_ready(&app),
+            "gate opened before the external source was marked ready"
+        );
+        if app
+            .world()
+            .resource::<LoadedFolders>()
+            .settled_count(app.world().resource::<AssetServer>())
+            == 1
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    app.world_mut()
+        .resource_mut::<LoadedFolders>()
+        .mark_external_ready(token);
+    assert!(
+        all_ready(&app),
+        "the gate must open once both the watched folder and the external source are ready"
+    );
+}
+
 // =============================================================================
 // LoadResource / ResourceHandles
 // =============================================================================
