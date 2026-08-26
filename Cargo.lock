@@ -3406,7 +3406,7 @@ dependencies = [
 
 [[package]]
 name = "msg_load_folder"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bevy 0.18.1",
  "bevy 0.19.0",

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-26
+
 ### Fixed
 
 - **`FolderLoaderPlugin` no longer registers with the `LoadedFolders` gate via
@@ -118,6 +120,7 @@ Upgrade to **Bevy 0.19**.
 
 - Initial release with Bevy 0.16 support.
 
+[0.5.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.2.0...v0.3.0

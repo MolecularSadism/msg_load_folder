@@ -29,7 +29,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.4.0" }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0" }
 bevy = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -42,7 +42,7 @@ Bevy 0.18 opt out of the default and pick `bevy_0_18` instead:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.4.0", default-features = false, features = ["bevy_0_18"] }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0", default-features = false, features = ["bevy_0_18"] }
 bevy = "0.18"
 serde = { version = "1.0", features = ["derive"] }
 ```
