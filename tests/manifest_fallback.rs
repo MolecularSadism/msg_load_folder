@@ -16,6 +16,7 @@ extern crate bevy018 as bevy;
 #[cfg(feature = "bevy_0_18")]
 extern crate bevy_common_assets018 as bevy_common_assets;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -70,11 +71,11 @@ impl AssetReader for NoListingReader {
         AssetReader::read_meta(&self.0, path).await
     }
 
-    async fn read_directory<'a>(
+    fn read_directory<'a>(
         &'a self,
         _path: &'a Path,
-    ) -> Result<Box<PathStream>, AssetReaderError> {
-        Ok(Box::new(futures_lite::stream::empty()))
+    ) -> impl Future<Output = Result<Box<PathStream>, AssetReaderError>> + 'a {
+        std::future::ready(Ok(Box::new(futures_lite::stream::empty()) as Box<PathStream>))
     }
 
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
