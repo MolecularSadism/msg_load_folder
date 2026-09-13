@@ -56,10 +56,10 @@ use bevy::tasks::{IoTaskPool, Task, block_on, futures_lite::StreamExt, poll_once
 
 pub mod prelude {
     pub use crate::{
-        AssetFile, AssetFolder, AssetFolderHandle, ExternalWatchId, FolderLoaderPlugin,
+        AssetFile, AssetFolder, AssetFolderHandle, ExternalWatchId, FolderLoaderPlugin, Library,
         LoadResource, LoadedFolders, LoadedFoldersPlugin, ResourceHandles, all_folders_ready,
         all_resources_loaded, deserialize_optional_string, id_from_filename,
-        id_from_filename_with_extensions, is_hidden_file,
+        id_from_filename_with_extensions, is_hidden_file, retain_present_in_folder,
     };
 }
 
@@ -456,6 +456,97 @@ where
     pub fn assets_mut(&mut self) -> &mut HashMap<Id, Handle<A>> {
         &mut self.assets
     }
+}
+
+// =============================================================================
+// Library
+// =============================================================================
+
+/// A library resource built by scanning one or more [`AssetFolder`]s: a map
+/// from `Id` to some per-id value, kept in sync with removals as well as
+/// additions.
+///
+/// Implement [`Self::map`] and [`Self::map_mut`] once, exposing the backing
+/// `HashMap`; the rest of the vocabulary — [`Self::get`], [`Self::contains`],
+/// [`Self::keys`], [`Self::len`], [`Self::is_empty`], [`Self::insert`], and
+/// crucially [`Self::prune_removed`] — is derived from that pair, so every
+/// folder-backed library shares one implementation of each instead of
+/// hand-rolling its own.
+///
+/// [`Self::prune_removed`] matters because a population system commonly only
+/// *adds* an entry once its folder loader reports it, and never removes one
+/// when its backing file disappears (deleted, or renamed to a different id)
+/// — leaving a stale entry that pins its handles alive forever. Worse, a
+/// readiness gate built on comparing lengths against the source
+/// [`AssetFolder`] (`folder.len() == library.len()`) can never be satisfied
+/// again once the two permanently disagree, wedging it shut for the rest of
+/// the run. Call [`Self::prune_removed`] once at the top of the population
+/// system, before adding newly discovered entries, so removals and renames
+/// are picked up on the next scan exactly like additions are. A library
+/// spanning several parallel maps (primary data plus derived per-id state)
+/// overrides [`Self::prune_removed`] to prune each of them, using
+/// [`retain_present_in_folder`] for the extra ones.
+pub trait Library<Id, V>
+where
+    Id: Clone + Copy + Eq + Hash + Send + Sync + 'static,
+    V: 'static,
+{
+    /// Read access to the backing map.
+    fn map(&self) -> &HashMap<Id, V>;
+    /// Mutable access to the backing map.
+    fn map_mut(&mut self) -> &mut HashMap<Id, V>;
+
+    /// Gets the value registered for `id`.
+    fn get(&self, id: Id) -> Option<&V> {
+        self.map().get(&id)
+    }
+
+    /// Whether `id` is registered.
+    fn contains(&self, id: Id) -> bool {
+        self.map().contains_key(&id)
+    }
+
+    /// All registered ids.
+    fn keys(&self) -> impl Iterator<Item = Id> + '_ {
+        self.map().keys().copied()
+    }
+
+    /// Number of registered entries.
+    fn len(&self) -> usize {
+        self.map().len()
+    }
+
+    /// Whether the library holds no entries.
+    fn is_empty(&self) -> bool {
+        self.map().is_empty()
+    }
+
+    /// Registers `value` for `id`, returning the previous value if any.
+    fn insert(&mut self, id: Id, value: V) -> Option<V> {
+        self.map_mut().insert(id, value)
+    }
+
+    /// Drops every entry whose id is no longer present in `folder`.
+    /// Idempotent: a no-op once the two already agree.
+    fn prune_removed<A>(&mut self, folder: &AssetFolder<Id, A>)
+    where
+        A: Asset + Clone + Send + Sync + 'static,
+    {
+        retain_present_in_folder(self.map_mut(), folder);
+    }
+}
+
+/// Retains only the entries of `map` whose key is still present in `folder`.
+///
+/// The shared logic behind [`Library::prune_removed`]'s default
+/// implementation; also the tool for pruning a library's parallel maps
+/// beyond its primary one (see [`Library::prune_removed`]'s documentation).
+pub fn retain_present_in_folder<Id, A, V>(map: &mut HashMap<Id, V>, folder: &AssetFolder<Id, A>)
+where
+    Id: Clone + Copy + Eq + Hash + Send + Sync + 'static,
+    A: Asset + Clone + Send + Sync + 'static,
+{
+    map.retain(|&id, _| folder.contains(id));
 }
 
 // =============================================================================
@@ -1364,6 +1455,85 @@ mod tests {
         // After the initial scan has registered the folder's assets
         handle.initial_load_complete = true;
         assert!(handle.is_loaded());
+    }
+
+    /// The shared logic behind [`PruneOnRemoval`] impls: a derived map drops
+    /// exactly the entries whose key the source folder no longer has, and
+    /// leaves everything else untouched.
+    #[test]
+    fn retain_present_in_folder_drops_entries_whose_folder_key_disappeared() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        let mut folder: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        let staying = MockId(1);
+        let removed = MockId(2);
+        folder.insert(staying, Handle::default());
+        folder.insert(removed, Handle::default());
+
+        let mut derived: HashMap<MockId, &'static str> = HashMap::new();
+        derived.insert(staying, "kept");
+        derived.insert(removed, "stale");
+
+        // The file backing `removed` disappears from disk; the next scan
+        // drops it from the folder's map.
+        folder.assets_mut().remove(&removed);
+
+        retain_present_in_folder(&mut derived, &folder);
+
+        assert_eq!(derived.len(), folder.len());
+        assert_eq!(derived.get(&staying), Some(&"kept"));
+        assert!(!derived.contains_key(&removed));
+    }
+
+    /// A minimal [`Library`] impl — just [`Library::map`]/[`Library::map_mut`]
+    /// exposing one field — gets lookup, membership, iteration, and
+    /// prune-on-removal for free from the trait's default methods.
+    #[test]
+    fn library_trait_default_methods_work_from_one_map_hook() {
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        struct MockLibrary {
+            entries: HashMap<MockId, String>,
+        }
+
+        impl Library<MockId, String> for MockLibrary {
+            fn map(&self) -> &HashMap<MockId, String> {
+                &self.entries
+            }
+            fn map_mut(&mut self) -> &mut HashMap<MockId, String> {
+                &mut self.entries
+            }
+        }
+
+        let mut library = MockLibrary {
+            entries: HashMap::new(),
+        };
+        assert!(library.is_empty());
+
+        let staying = MockId(1);
+        let removed = MockId(2);
+        library.insert(staying, "kept".to_string());
+        library.insert(removed, "stale".to_string());
+
+        assert_eq!(library.len(), 2);
+        assert!(library.contains(staying));
+        assert_eq!(library.get(staying), Some(&"kept".to_string()));
+        assert_eq!(library.keys().count(), 2);
+
+        let mut folder: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        folder.insert(staying, Handle::default());
+        folder.insert(removed, Handle::default());
+        // The file backing `removed` disappears from disk; the next scan
+        // drops it from the folder's map.
+        folder.assets_mut().remove(&removed);
+
+        library.prune_removed(&folder);
+
+        assert_eq!(library.len(), 1);
+        assert!(library.contains(staying));
+        assert!(!library.contains(removed));
     }
 
     #[test]

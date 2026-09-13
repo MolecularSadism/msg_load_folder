@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Library` trait and `retain_present_in_folder` helper.** A library
+  resource built by scanning one or more `AssetFolder`s is a map from `Id` to
+  some per-id value; implement `Library::map`/`map_mut` once and get lookup,
+  membership, iteration, and insertion for free. It also gets
+  `Library::prune_removed`: such a library commonly only *adds* entries as
+  they load, and never drops one when its backing file disappears (deleted,
+  or renamed to a different id) — leaving a stale entry pinning its handles
+  alive forever, and permanently breaking any readiness gate that compares
+  lengths against the source folder. Call `prune_removed` at the top of the
+  population system, before adding newly discovered entries; a library
+  spanning several parallel maps overrides it, using the new
+  `retain_present_in_folder` helper for the extra ones.
+
 ## [0.5.0] - 2026-08-26
 
 ### Fixed
