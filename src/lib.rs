@@ -629,17 +629,20 @@ async fn scan_directory(
     }
 }
 
-/// Fallback manifest filename [`read_manifest`] reads. Leading `.` keeps it
-/// out of directory scans.
-const DIR_MANIFEST_FILE: &str = ".dir_manifest";
+/// Manifest filename [`read_manifest`] reads as a fallback for readers that
+/// can't list directories (e.g. web/HTTP). Named to avoid this crate's own
+/// hidden/disabled (`.`/`_`-prefix) convention, so it never needs exempting
+/// from a consumer's own asset-stripping tooling.
+const DIR_MANIFEST_FILE: &str = "dir.manifest";
 
-/// Lists the immediate children of `path` as `(child_path, is_directory)`
-/// pairs, the way [`scan_directory`] needs them.
+/// Lists `path`'s immediate children as `(child_path, is_directory)` pairs.
 ///
-/// Prefers the reader's native [`ErasedAssetReader::read_directory`]; when
-/// that comes back empty or errors (a reader that can't list at all, or one
-/// that genuinely failed), falls back to [`read_manifest`]. A missing
-/// manifest is only an error if native listing also failed.
+/// Prefers native [`ErasedAssetReader::read_directory`]. Falls back to
+/// [`read_manifest`] when that comes back empty or erroring — covers both a
+/// reader that can't list directories at all (returns `Ok` with nothing,
+/// e.g. web/HTTP) and one that errors outright. A missing manifest is only
+/// an error when native listing didn't work either; otherwise it just means
+/// the folder is empty.
 async fn list_children(
     reader: &dyn ErasedAssetReader,
     path: &Path,
@@ -665,9 +668,9 @@ async fn list_children(
     }
 }
 
-/// Reads and parses the [`DIR_MANIFEST_FILE`] at `path` (one child name per
-/// line, trailing `/` for a directory). This crate only reads it; generating
-/// the manifest is external.
+/// Reads and parses a [`DIR_MANIFEST_FILE`] at `path`: one child name per
+/// line, trailing `/` for a subdirectory. Generating this file is an
+/// external build step's job; this crate only reads it.
 async fn read_manifest(
     reader: &dyn ErasedAssetReader,
     path: &Path,
