@@ -19,6 +19,7 @@ This crate provides a plugin that automatically discovers and loads assets from 
 - **Resilient loading**: Files are loaded individually, so a single malformed file (e.g. a `.ron` with a syntax error) never blocks the rest of the folder
 - **Hot reloading**: When asset watching is on, edited, added and removed files are picked up automatically
 - **File filtering**: Skips hidden files (`.`) and disabled files (`_`)
+- **`Library` trait**: shared `get`/`contains`/`keys`/`len`/`is_empty`/`insert`/`retain` vocabulary for a resource derived from an `AssetFolder`, plus `prune_removed` to keep it in sync with removals and renames — without it, a derived library only grows and a deleted file's entry pins its handles alive forever
 - **Readiness gate**: `LoadedFoldersPlugin` tracks folder loads so loading screens can gate on `LoadedFolders::all_ready` (or the `all_folders_ready` run condition)
 - **Asset-backed resources**: `app.load_resource::<T>()` inserts a resource only once its asset dependencies have loaded, gated by `ResourceHandles::is_all_done` (or `all_resources_loaded`)
 - **Path-aware assets**: the `AssetFile` trait lets a config value name the file it was loaded from in errors and hot-reload messages
@@ -29,7 +30,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0" }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.7.0" }
 bevy = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -42,7 +43,7 @@ Bevy 0.18 opt out of the default and pick `bevy_0_18` instead:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0", default-features = false, features = ["bevy_0_18"] }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.7.0", default-features = false, features = ["bevy_0_18"] }
 bevy = "0.18"
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -122,6 +123,21 @@ assets/
       health_potion.item.ron  -> ItemId("health_potion")
 ```
 
+## Web / WASM Support
+
+Web/HTTP asset readers (including Bevy's web/wasm `AssetReader`) can't list
+directory contents, so folder scanning finds nothing on those targets unless
+a `.dir_manifest` file is present: one entry per line, relative to the
+directory, with a trailing `/` for subdirectories:
+
+```text
+fireball.spell.ron
+ice_bolt.spell.ron
+```
+
+Native builds ignore the manifest entirely; generating it for a web build is
+the consuming project's job.
+
 ## Resilience & Hot Reloading
 
 Files are discovered by scanning the folder and then loaded **individually**.
@@ -166,6 +182,14 @@ app.add_plugins(AssetPlugin {
 
 Without watching, the folder is still scanned and loaded once (and remains
 resilient to malformed files); it just won't react to later changes.
+
+**This reconciliation is `AssetFolder`'s own.** A derived library resource —
+one that wraps an `AssetFolder` to attach extra per-id data (decoded sprite
+handles, converted runtime types, ...) — commonly only *adds* an entry once
+its folder loader reports it, and never removes one when the backing file
+disappears. Implement the [`Library`](#library) trait and call
+`prune_removed` at the top of the population system to keep such a resource
+in sync with removals and renames too.
 
 ## Readiness Gate
 
@@ -331,6 +355,59 @@ if library.is_ready() {
 let count = library.len();
 # assert_eq!(count, 1);
 ```
+
+### `Library<Id, V>`
+
+Shared vocabulary for a resource derived from an `AssetFolder` — one that
+attaches extra per-id data (decoded sprite handles, converted runtime types,
+...) rather than being the `AssetFolder` itself. Implement the six required
+methods (each a one-line delegation to your own field, whatever map type it
+is) and get `is_empty` and `prune_removed` for free.
+
+```rust
+# #[cfg(feature = "bevy_0_18")] extern crate bevy018 as bevy;
+# use msg_load_folder::prelude::*;
+# use bevy::prelude::*;
+# use std::collections::HashMap;
+# #[derive(Asset, Clone, Reflect)]
+# struct Spell { name: String }
+# #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+# struct SpellId(u64);
+struct SpellLibrary {
+    entries: HashMap<SpellId, String>,
+}
+
+impl Library<SpellId, String> for SpellLibrary {
+    fn get(&self, id: SpellId) -> Option<&String> {
+        self.entries.get(&id)
+    }
+    fn contains(&self, id: SpellId) -> bool {
+        self.entries.contains_key(&id)
+    }
+    fn keys(&self) -> impl Iterator<Item = SpellId> + '_ {
+        self.entries.keys().copied()
+    }
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+    fn insert(&mut self, id: SpellId, value: String) -> Option<String> {
+        self.entries.insert(id, value)
+    }
+    fn retain(&mut self, mut keep: impl FnMut(SpellId) -> bool) {
+        self.entries.retain(|&id, _| keep(id));
+    }
+}
+
+# let mut library = SpellLibrary { entries: HashMap::new() };
+# let folder: AssetFolder<SpellId, Spell> = AssetFolder::new();
+// At the top of the population system, before adding newly discovered
+// entries — drops anything `folder` no longer has.
+library.prune_removed(&folder);
+```
+
+A library spanning several parallel maps (primary data plus derived per-id
+state, all keyed the same way) overrides `prune_removed` to prune each of
+them.
 
 ### `AssetFolderHandle<Id, A>`
 

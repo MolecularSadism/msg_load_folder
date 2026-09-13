@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-13
+
 ### Added
 
 - **`Library` trait.** A library resource built by scanning one or more
@@ -23,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the top of the population system, before adding newly discovered
   entries; a library spanning several parallel maps overrides it to prune
   each of them the same way.
+
+## [0.6.0] - 2026-09-13
+
+### Added
+
+- Folder scanning falls back to a `.dir_manifest` file when the reader can't
+  list directories (Bevy's web/wasm `AssetReader`). Native scanning and hot
+  reload are unaffected; generating manifests for a web build is left to the
+  consuming project.
 
 ## [0.5.0] - 2026-08-26
 
@@ -137,6 +148,8 @@ Upgrade to **Bevy 0.19**.
 
 - Initial release with Bevy 0.16 support.
 
+[0.7.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.3.0...v0.3.1
