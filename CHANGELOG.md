@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-13
+
+### Fixed
+
+- **Renamed the directory-manifest fallback file from `.dir_manifest` to
+  `dir.manifest`.** The leading `.` collided with this crate's own
+  hidden-file convention (`.`/`_`-prefixed names are skipped), which forced
+  every consumer to special-case the manifest in their own asset-stripping
+  tooling to avoid it being deleted before packaging. `dir.manifest` needs no
+  such exemption anywhere.
+
 ## [0.6.0] - 2026-09-13
 
 ### Added
