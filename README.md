@@ -124,33 +124,18 @@ assets/
 
 ## Web / WASM Support
 
-Folder scanning walks the folder's `AssetReader` recursively, calling
-`read_directory` at each level. That works out of the box on native targets,
-but a plain HTTP source — including Bevy's web/wasm `AssetReader` — has no
-protocol-level way to list what lives under a URL, so `read_directory` there
-always comes back `Ok` with an empty listing instead of an error. Nothing
-hangs; the folder just silently loads zero files.
+Web/HTTP asset readers (including Bevy's web/wasm `AssetReader`) can't list
+directory contents, so folder scanning finds nothing on those targets unless
+a `.dir_manifest` file is present: one entry per line, relative to the
+directory, with a trailing `/` for subdirectories:
 
-To fix that, drop a `.dir_manifest` file into a directory: one entry per
-line, relative to that directory, with a trailing `/` marking a
-subdirectory:
-
-```text
-assets/prefabs/spells/.dir_manifest
-```
 ```text
 fireball.spell.ron
 ice_bolt.spell.ron
 ```
 
-When present, the scan reads this manifest through the same `AssetReader`
-instead of listing the directory — reading one *known* file works over HTTP
-even though listing does not. It is only consulted as a fallback: a reader
-that can already list the directory (every native build) ignores the
-manifest entirely, so it never needs to be kept in sync there. This crate
-only ever reads `.dir_manifest` files; generating them for a web build —
-walking `assets/` and writing one into every directory — is a build step the
-consuming project owns.
+Native builds ignore the manifest entirely; generating it for a web build is
+the consuming project's job.
 
 ## Resilience & Hot Reloading
 

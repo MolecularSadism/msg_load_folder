@@ -629,28 +629,17 @@ async fn scan_directory(
     }
 }
 
-/// Name of the manifest file [`read_manifest`] looks for. Starts with `.` so
-/// it is skipped by [`is_hidden_file`] on the rare reader that surfaces it
-/// through directory listing too.
+/// Fallback manifest filename [`read_manifest`] reads. Leading `.` keeps it
+/// out of directory scans.
 const DIR_MANIFEST_FILE: &str = ".dir_manifest";
 
 /// Lists the immediate children of `path` as `(child_path, is_directory)`
 /// pairs, the way [`scan_directory`] needs them.
 ///
-/// Tries the reader's native [`ErasedAssetReader::read_directory`] first —
-/// this is the only path exercised on a native filesystem, and it is left
-/// untouched. Some readers can never answer it, though: a plain HTTP source
-/// (Bevy's web/wasm `AssetReader`) has no protocol-level way to list what
-/// lives under a URL, so `read_directory` there returns `Ok` with an empty
-/// stream instead of an error — indistinguishable, from here, from a
-/// genuinely empty native folder. Either way — that empty result, or an
-/// outright error — this falls back to reading a [`DIR_MANIFEST_FILE`]
-/// manifest at `path` via the same reader: reading one *known* file works
-/// over HTTP even though listing does not, so a build step that drops such a
-/// manifest into every asset directory before a web build is enough to make
-/// this crate's folder scanning work there too. When native listing already
-/// succeeded, a missing manifest is not an error — it just means the folder
-/// really is empty.
+/// Prefers the reader's native [`ErasedAssetReader::read_directory`]; when
+/// that comes back empty or errors (a reader that can't list at all, or one
+/// that genuinely failed), falls back to [`read_manifest`]. A missing
+/// manifest is only an error if native listing also failed.
 async fn list_children(
     reader: &dyn ErasedAssetReader,
     path: &Path,
@@ -676,13 +665,9 @@ async fn list_children(
     }
 }
 
-/// Reads a [`DIR_MANIFEST_FILE`] at `path` and parses it into
-/// `(child_path, is_directory)` pairs.
-///
-/// Format: one entry per line, a name relative to `path` (not a full path);
-/// a trailing `/` marks a subdirectory. Blank lines are ignored. This crate
-/// only ever reads this file — generating it is an external build step's
-/// job, run wherever a target's `AssetReader` cannot list directories.
+/// Reads and parses the [`DIR_MANIFEST_FILE`] at `path` (one child name per
+/// line, trailing `/` for a directory). This crate only reads it; generating
+/// the manifest is external.
 async fn read_manifest(
     reader: &dyn ErasedAssetReader,
     path: &Path,
