@@ -56,7 +56,7 @@ use bevy::tasks::{IoTaskPool, Task, block_on, futures_lite::StreamExt, poll_once
 
 pub mod prelude {
     pub use crate::{
-        AssetFile, AssetFolder, AssetFolderHandle, ExternalWatchId, FolderLoaderPlugin,
+        AssetFile, AssetFolder, AssetFolderHandle, ExternalWatchId, FolderLoaderPlugin, Library,
         LoadResource, LoadedFolders, LoadedFoldersPlugin, ResourceHandles, all_folders_ready,
         all_resources_loaded, deserialize_optional_string, id_from_filename,
         id_from_filename_with_extensions, is_hidden_file,
@@ -455,6 +455,70 @@ where
     #[must_use]
     pub fn assets_mut(&mut self) -> &mut HashMap<Id, Handle<A>> {
         &mut self.assets
+    }
+}
+
+// =============================================================================
+// Library
+// =============================================================================
+
+/// A library resource built by scanning one or more [`AssetFolder`]s: a map
+/// from `Id` to some per-id value, kept in sync with removals as well as
+/// additions.
+///
+/// Deliberately per-operation rather than exposing a backing map directly:
+/// implementers store their entries however they like — `std`'s `HashMap`,
+/// Bevy's `platform::collections::HashMap`, or anything else keyed the same
+/// way — so long as each method here delegates to it. Every method but
+/// [`Self::is_empty`] and [`Self::prune_removed`] is required for exactly
+/// that reason; both of those are derived from the others.
+///
+/// [`Self::prune_removed`] matters because a population system commonly only
+/// *adds* an entry once its folder loader reports it, and never removes one
+/// when its backing file disappears (deleted, or renamed to a different id)
+/// — leaving a stale entry that pins its handles alive forever. Worse, a
+/// readiness gate built on comparing lengths against the source
+/// [`AssetFolder`] (`folder.len() == library.len()`) can never be satisfied
+/// again once the two permanently disagree, wedging it shut for the rest of
+/// the run. Call [`Self::prune_removed`] once at the top of the population
+/// system, before adding newly discovered entries, so removals and renames
+/// are picked up on the next scan exactly like additions are. A library
+/// spanning several parallel maps (primary data plus derived per-id state)
+/// overrides [`Self::prune_removed`] to prune each of them the same way.
+pub trait Library<Id, V>
+where
+    Id: Clone + Copy + Eq + Hash + Send + Sync + 'static,
+{
+    /// Gets the value registered for `id`.
+    fn get(&self, id: Id) -> Option<&V>;
+
+    /// Whether `id` is registered.
+    fn contains(&self, id: Id) -> bool;
+
+    /// All registered ids.
+    fn keys(&self) -> impl Iterator<Item = Id> + '_;
+
+    /// Number of registered entries.
+    fn len(&self) -> usize;
+
+    /// Registers `value` for `id`, returning the previous value if any.
+    fn insert(&mut self, id: Id, value: V) -> Option<V>;
+
+    /// Drops every entry for which `keep` returns `false`.
+    fn retain(&mut self, keep: impl FnMut(Id) -> bool);
+
+    /// Whether the library holds no entries.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Drops every entry whose id is no longer present in `folder`.
+    /// Idempotent: a no-op once the two already agree.
+    fn prune_removed<A>(&mut self, folder: &AssetFolder<Id, A>)
+    where
+        A: Asset + Clone + Send + Sync + 'static,
+    {
+        self.retain(|id| folder.contains(id));
     }
 }
 
@@ -1359,7 +1423,7 @@ mod tests {
     use super::*;
 
     // Mock ID type for testing
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
     struct MockId(u64);
 
     impl From<String> for MockId {
@@ -1421,6 +1485,73 @@ mod tests {
         // After the initial scan has registered the folder's assets
         handle.initial_load_complete = true;
         assert!(handle.is_loaded());
+    }
+
+    /// A minimal [`Library`] impl — each method a one-line delegation to its
+    /// own field, deliberately typed as a *different* map than
+    /// [`AssetFolder`]'s own (a `BTreeMap`, standing in for e.g. Bevy's
+    /// `platform::collections::HashMap`) — gets lookup, membership,
+    /// iteration, and prune-on-removal working correctly regardless of what
+    /// concrete map backs it.
+    #[test]
+    fn library_trait_methods_work_over_any_backing_map() {
+        use std::collections::BTreeMap;
+
+        #[derive(Asset, Clone, Reflect, Default)]
+        struct MockAsset;
+
+        struct MockLibrary {
+            entries: BTreeMap<MockId, String>,
+        }
+
+        impl Library<MockId, String> for MockLibrary {
+            fn get(&self, id: MockId) -> Option<&String> {
+                self.entries.get(&id)
+            }
+            fn contains(&self, id: MockId) -> bool {
+                self.entries.contains_key(&id)
+            }
+            fn keys(&self) -> impl Iterator<Item = MockId> + '_ {
+                self.entries.keys().copied()
+            }
+            fn len(&self) -> usize {
+                self.entries.len()
+            }
+            fn insert(&mut self, id: MockId, value: String) -> Option<String> {
+                self.entries.insert(id, value)
+            }
+            fn retain(&mut self, mut keep: impl FnMut(MockId) -> bool) {
+                self.entries.retain(|&id, _| keep(id));
+            }
+        }
+
+        let mut library = MockLibrary {
+            entries: BTreeMap::new(),
+        };
+        assert!(library.is_empty());
+
+        let staying = MockId(1);
+        let removed = MockId(2);
+        library.insert(staying, "kept".to_string());
+        library.insert(removed, "stale".to_string());
+
+        assert_eq!(library.len(), 2);
+        assert!(library.contains(staying));
+        assert_eq!(library.get(staying), Some(&"kept".to_string()));
+        assert_eq!(library.keys().count(), 2);
+
+        let mut folder: AssetFolder<MockId, MockAsset> = AssetFolder::new();
+        folder.insert(staying, Handle::default());
+        folder.insert(removed, Handle::default());
+        // The file backing `removed` disappears from disk; the next scan
+        // drops it from the folder's map.
+        folder.assets_mut().remove(&removed);
+
+        library.prune_removed(&folder);
+
+        assert_eq!(library.len(), 1);
+        assert!(library.contains(staying));
+        assert!(!library.contains(removed));
     }
 
     #[test]

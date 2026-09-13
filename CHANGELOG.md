@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-13
+
+### Added
+
+- **`Library` trait.** A library resource built by scanning one or more
+  `AssetFolder`s is a map from `Id` to some per-id value. `Library` is the
+  shared vocabulary for it — `get`/`contains`/`keys`/`len`/`is_empty`/
+  `insert`/`retain`, one short delegating method each regardless of what
+  concrete map backs the implementation (`std`'s `HashMap`, Bevy's
+  `platform::collections::HashMap`, anything keyed the same way) — plus
+  `Library::prune_removed`, derived from `retain`: such a library commonly
+  only *adds* entries as they load, and never drops one when its backing file
+  disappears (deleted, or renamed to a different id) — leaving a stale entry
+  pinning its handles alive forever, and permanently breaking any readiness
+  gate that compares lengths against the source folder. Call `prune_removed`
+  at the top of the population system, before adding newly discovered
+  entries; a library spanning several parallel maps overrides it to prune
+  each of them the same way.
+
 ## [0.6.1] - 2026-09-13
 
 ### Fixed
@@ -140,6 +159,9 @@ Upgrade to **Bevy 0.19**.
 
 - Initial release with Bevy 0.16 support.
 
+[0.7.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.3.0...v0.3.1
