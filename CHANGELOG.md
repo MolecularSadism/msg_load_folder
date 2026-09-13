@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-13
+
+### Added
+
+- Folder scanning falls back to a `.dir_manifest` file when the reader can't
+  list directories (Bevy's web/wasm `AssetReader`). Native scanning and hot
+  reload are unaffected; generating manifests for a web build is left to the
+  consuming project.
+
 ## [0.5.0] - 2026-08-26
 
 ### Fixed

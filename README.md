@@ -29,7 +29,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0" }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.6.0" }
 bevy = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -42,7 +42,7 @@ Bevy 0.18 opt out of the default and pick `bevy_0_18` instead:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0", default-features = false, features = ["bevy_0_18"] }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.6.0", default-features = false, features = ["bevy_0_18"] }
 bevy = "0.18"
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -121,6 +121,21 @@ assets/
     items/
       health_potion.item.ron  -> ItemId("health_potion")
 ```
+
+## Web / WASM Support
+
+Web/HTTP asset readers (including Bevy's web/wasm `AssetReader`) can't list
+directory contents, so folder scanning finds nothing on those targets unless
+a `.dir_manifest` file is present: one entry per line, relative to the
+directory, with a trailing `/` for subdirectories:
+
+```text
+fireball.spell.ron
+ice_bolt.spell.ron
+```
+
+Native builds ignore the manifest entirely; generating it for a web build is
+the consuming project's job.
 
 ## Resilience & Hot Reloading
 
