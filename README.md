@@ -127,7 +127,7 @@ assets/
 
 Web/HTTP asset readers (including Bevy's web/wasm `AssetReader`) can't list
 directory contents, so folder scanning finds nothing on those targets unless
-a `.dir_manifest` file is present: one entry per line, relative to the
+a `dir.manifest` file is present: one entry per line, relative to the
 directory, with a trailing `/` for subdirectories:
 
 ```text
