@@ -75,7 +75,9 @@ impl AssetReader for NoListingReader {
         &'a self,
         _path: &'a Path,
     ) -> impl Future<Output = Result<Box<PathStream>, AssetReaderError>> + 'a {
-        std::future::ready(Ok(Box::new(futures_lite::stream::empty()) as Box<PathStream>))
+        std::future::ready(Ok(
+            Box::new(futures_lite::stream::empty()) as Box<PathStream>
+        ))
     }
 
     async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
