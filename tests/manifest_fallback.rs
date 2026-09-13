@@ -1,4 +1,4 @@
-//! Integration test for the `.dir_manifest` fallback that lets folder
+//! Integration test for the `dir.manifest` fallback that lets folder
 //! scanning work on asset readers that cannot list directories — the
 //! situation on Bevy's web/wasm `AssetReader`, which has no protocol-level
 //! way to enumerate a URL's contents, so `read_directory` there always comes
@@ -157,7 +157,7 @@ fn loaded_value(app: &App, name: &str) -> Option<i32> {
 // Tests
 // =============================================================================
 
-/// Without a `.dir_manifest`, a reader that cannot list directories sees
+/// Without a `dir.manifest`, a reader that cannot list directories sees
 /// nothing — this reproduces the original bug report exactly: the loader
 /// still completes (no hang, no error), just with an empty library.
 #[test]
@@ -182,7 +182,7 @@ fn no_manifest_means_nothing_loads() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// With a `.dir_manifest` alongside the files, the same non-listing reader
+/// With a `dir.manifest` alongside the files, the same non-listing reader
 /// discovers and loads them — the actual fix under test.
 #[test]
 fn manifest_makes_folder_loading_work() {
@@ -191,7 +191,7 @@ fn manifest_makes_folder_loading_work() {
     write(&root, "things/beta.thing.ron", "(value: 2)");
     write(
         &root,
-        "things/.dir_manifest",
+        "things/dir.manifest",
         "alpha.thing.ron\nbeta.thing.ron\n",
     );
 
@@ -216,8 +216,8 @@ fn manifest_makes_folder_loading_work() {
 fn manifest_recurses_into_subdirectories() {
     let root = unique_asset_root();
     write(&root, "things/nested/gamma.thing.ron", "(value: 3)");
-    write(&root, "things/.dir_manifest", "nested/\n");
-    write(&root, "things/nested/.dir_manifest", "gamma.thing.ron\n");
+    write(&root, "things/dir.manifest", "nested/\n");
+    write(&root, "things/nested/dir.manifest", "gamma.thing.ron\n");
 
     let mut app = build_app(&root);
     let ok = run_until(&mut app, 1000, |app| loaded_value(app, "gamma").is_some());
