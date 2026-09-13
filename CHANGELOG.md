@@ -11,17 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Folder scanning now works on asset readers that cannot list directories**
-  — notably Bevy's web/wasm `AssetReader`, which has no protocol-level way to
-  enumerate a URL's contents and so always answers `read_directory` with an
-  empty (not erroring) listing. The scan now falls back to reading a
-  `.dir_manifest` file at each directory through the same reader when native
-  listing comes back empty or fails — reading one *known* file works over
-  HTTP even though listing does not. A native build that can already list
-  directories never looks for the manifest at all, and if it does, a missing
-  one is not an error. Generating `.dir_manifest` files for a web build
-  (walking `assets/` and writing one into every directory) is a build step
-  the consuming project owns; this crate only ever reads them.
+- Folder scanning falls back to a `.dir_manifest` file when the reader can't
+  list directories (Bevy's web/wasm `AssetReader`). Native scanning and hot
+  reload are unaffected; generating manifests for a web build is left to the
+  consuming project.
 
 ## [0.5.0] - 2026-08-26
 
