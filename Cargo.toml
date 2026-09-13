@@ -80,8 +80,3 @@ type_complexity = "allow"
 # Bevy systems must take `Res`/`ResMut` params by value; taking them by
 # reference is not possible, so this pedantic lint is a false positive here.
 needless_pass_by_value = "allow"
-# `retain_present_in_folder` only ever operates on the default-hasher
-# `HashMap` every `AssetFolder`/`Library` in this crate already uses;
-# generalizing it over `BuildHasher` would be dead flexibility no caller can
-# reach.
-implicit_hasher = "allow"
