@@ -29,7 +29,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0" }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.6.0" }
 bevy = "0.19"
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -42,7 +42,7 @@ Bevy 0.18 opt out of the default and pick `bevy_0_18` instead:
 
 ```toml
 [dependencies]
-msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.5.0", default-features = false, features = ["bevy_0_18"] }
+msg_load_folder = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.6.0", default-features = false, features = ["bevy_0_18"] }
 bevy = "0.18"
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -121,6 +121,36 @@ assets/
     items/
       health_potion.item.ron  -> ItemId("health_potion")
 ```
+
+## Web / WASM Support
+
+Folder scanning walks the folder's `AssetReader` recursively, calling
+`read_directory` at each level. That works out of the box on native targets,
+but a plain HTTP source — including Bevy's web/wasm `AssetReader` — has no
+protocol-level way to list what lives under a URL, so `read_directory` there
+always comes back `Ok` with an empty listing instead of an error. Nothing
+hangs; the folder just silently loads zero files.
+
+To fix that, drop a `.dir_manifest` file into a directory: one entry per
+line, relative to that directory, with a trailing `/` marking a
+subdirectory:
+
+```text
+assets/prefabs/spells/.dir_manifest
+```
+```text
+fireball.spell.ron
+ice_bolt.spell.ron
+```
+
+When present, the scan reads this manifest through the same `AssetReader`
+instead of listing the directory — reading one *known* file works over HTTP
+even though listing does not. It is only consulted as a fallback: a reader
+that can already list the directory (every native build) ignores the
+manifest entirely, so it never needs to be kept in sync there. This crate
+only ever reads `.dir_manifest` files; generating them for a web build —
+walking `assets/` and writing one into every directory — is a build step the
+consuming project owns.
 
 ## Resilience & Hot Reloading
 

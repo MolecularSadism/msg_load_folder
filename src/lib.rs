@@ -46,7 +46,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use bevy::asset::io::ErasedAssetReader;
+use bevy::asset::io::{AssetReaderError, ErasedAssetReader, Reader};
 use bevy::asset::{
     AssetLoadFailedEvent, AssetPath, LoadState, LoadedFolder, RecursiveDependencyLoadState,
     UntypedHandle,
@@ -609,8 +609,8 @@ async fn scan_directory(
     file_extensions: &[&str],
     out: &mut Vec<PathBuf>,
 ) {
-    let mut entries = match reader.read_directory(path).await {
-        Ok(entries) => entries,
+    let children = match list_children(reader, path).await {
+        Ok(children) => children,
         Err(err) => {
             warn!(
                 "FolderLoader: failed to read directory '{}': {err}",
@@ -620,20 +620,89 @@ async fn scan_directory(
         }
     };
 
-    while let Some(child) = entries.next().await {
-        match reader.is_directory(&child).await {
-            Ok(true) => Box::pin(scan_directory(reader, &child, file_extensions, out)).await,
-            Ok(false) => {
-                if filename_has_extension(&child, file_extensions) {
-                    out.push(child);
-                }
-            }
-            Err(err) => warn!(
-                "FolderLoader: failed to inspect '{}': {err}",
-                child.display()
-            ),
+    for (child, is_dir) in children {
+        if is_dir {
+            Box::pin(scan_directory(reader, &child, file_extensions, out)).await;
+        } else if filename_has_extension(&child, file_extensions) {
+            out.push(child);
         }
     }
+}
+
+/// Name of the manifest file [`read_manifest`] looks for. Starts with `.` so
+/// it is skipped by [`is_hidden_file`] on the rare reader that surfaces it
+/// through directory listing too.
+const DIR_MANIFEST_FILE: &str = ".dir_manifest";
+
+/// Lists the immediate children of `path` as `(child_path, is_directory)`
+/// pairs, the way [`scan_directory`] needs them.
+///
+/// Tries the reader's native [`ErasedAssetReader::read_directory`] first —
+/// this is the only path exercised on a native filesystem, and it is left
+/// untouched. Some readers can never answer it, though: a plain HTTP source
+/// (Bevy's web/wasm `AssetReader`) has no protocol-level way to list what
+/// lives under a URL, so `read_directory` there returns `Ok` with an empty
+/// stream instead of an error — indistinguishable, from here, from a
+/// genuinely empty native folder. Either way — that empty result, or an
+/// outright error — this falls back to reading a [`DIR_MANIFEST_FILE`]
+/// manifest at `path` via the same reader: reading one *known* file works
+/// over HTTP even though listing does not, so a build step that drops such a
+/// manifest into every asset directory before a web build is enough to make
+/// this crate's folder scanning work there too. When native listing already
+/// succeeded, a missing manifest is not an error — it just means the folder
+/// really is empty.
+async fn list_children(
+    reader: &dyn ErasedAssetReader,
+    path: &Path,
+) -> Result<Vec<(PathBuf, bool)>, AssetReaderError> {
+    let native_listing = reader.read_directory(path).await;
+    let native_succeeded = native_listing.is_ok();
+
+    if let Ok(mut entries) = native_listing {
+        let mut children = Vec::new();
+        while let Some(child) = entries.next().await {
+            let is_dir = reader.is_directory(&child).await.unwrap_or(false);
+            children.push((child, is_dir));
+        }
+        if !children.is_empty() {
+            return Ok(children);
+        }
+    }
+
+    match read_manifest(reader, path).await {
+        Ok(children) => Ok(children),
+        Err(AssetReaderError::NotFound(_)) if native_succeeded => Ok(Vec::new()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Reads a [`DIR_MANIFEST_FILE`] at `path` and parses it into
+/// `(child_path, is_directory)` pairs.
+///
+/// Format: one entry per line, a name relative to `path` (not a full path);
+/// a trailing `/` marks a subdirectory. Blank lines are ignored. This crate
+/// only ever reads this file — generating it is an external build step's
+/// job, run wherever a target's `AssetReader` cannot list directories.
+async fn read_manifest(
+    reader: &dyn ErasedAssetReader,
+    path: &Path,
+) -> Result<Vec<(PathBuf, bool)>, AssetReaderError> {
+    let manifest_path = path.join(DIR_MANIFEST_FILE);
+    let mut file: Box<dyn Reader> = reader.read(&manifest_path).await?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .await
+        .map_err(|err| AssetReaderError::Io(std::sync::Arc::new(err)))?;
+
+    Ok(String::from_utf8_lossy(&bytes)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| match line.strip_suffix('/') {
+            Some(name) => (path.join(name), true),
+            None => (path.join(line), false),
+        })
+        .collect())
 }
 
 /// Registers the assets found by a scan, loading each file individually so a
