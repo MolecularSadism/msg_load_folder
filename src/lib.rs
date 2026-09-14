@@ -628,9 +628,11 @@ fn load_assets_from_folder<Id, A>(
                 gate.mark_external_ready(token);
             }
             info!(
-                "Loaded {} asset(s) from folder '{}'",
+                "Loaded {} {} asset(s) from folder '{}' ({:?})",
                 library.len(),
-                config.folder_path
+                std::any::type_name::<A>(),
+                config.folder_path,
+                config.file_extensions,
             );
         }
     }
