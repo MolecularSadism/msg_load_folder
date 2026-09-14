@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The initial-load-complete log line now names the asset type and file
+  extensions it loaded (`"Loaded {n} {type} asset(s) from folder '{path}'
+  ({extensions})"`), so two `FolderLoaderPlugin`s watching the same folder
+  path for different asset types produce distinguishable log lines instead
+  of two identical-looking ones.
+
 ## [0.6.0] - 2026-09-13
 
 ### Added
