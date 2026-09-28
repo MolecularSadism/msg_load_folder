@@ -41,6 +41,12 @@ pub extern crate bevy018 as bevy;
 #[cfg(feature = "bevy_0_19")]
 pub extern crate bevy;
 
+/// The `dir.manifest` format the folder scanner falls back to on asset
+/// readers that cannot list directories, with the writer a web build's
+/// packaging step generates it with. Std-only: tools that must not compile
+/// Bevy depend on `msg_load_folder_manifest` directly.
+pub use msg_load_folder_manifest as manifest;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -695,12 +701,6 @@ async fn scan_directory(
     }
 }
 
-/// Manifest filename [`read_manifest`] reads as a fallback for readers that
-/// can't list directories (e.g. web/HTTP). Named to avoid this crate's own
-/// hidden/disabled (`.`/`_`-prefix) convention, so it never needs exempting
-/// from a consumer's own asset-stripping tooling.
-const DIR_MANIFEST_FILE: &str = "dir.manifest";
-
 /// Lists `path`'s immediate children as `(child_path, is_directory)` pairs.
 ///
 /// Prefers native [`ErasedAssetReader::read_directory`]. Falls back to
@@ -734,28 +734,21 @@ async fn list_children(
     }
 }
 
-/// Reads and parses a [`DIR_MANIFEST_FILE`] at `path`: one child name per
-/// line, trailing `/` for a subdirectory. Generating this file is an
-/// external build step's job; this crate only reads it.
+/// Reads and parses the [`manifest::DIR_MANIFEST_FILE`] at `path`, which a
+/// web build's packaging step writes with [`manifest::write_dir_manifests`].
 async fn read_manifest(
     reader: &dyn ErasedAssetReader,
     path: &Path,
 ) -> Result<Vec<(PathBuf, bool)>, AssetReaderError> {
-    let manifest_path = path.join(DIR_MANIFEST_FILE);
+    let manifest_path = path.join(manifest::DIR_MANIFEST_FILE);
     let mut file: Box<dyn Reader> = reader.read(&manifest_path).await?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .await
         .map_err(|err| AssetReaderError::Io(std::sync::Arc::new(err)))?;
 
-    Ok(String::from_utf8_lossy(&bytes)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| match line.strip_suffix('/') {
-            Some(name) => (path.join(name), true),
-            None => (path.join(line), false),
-        })
+    Ok(manifest::parse_manifest(&String::from_utf8_lossy(&bytes))
+        .map(|entry| (path.join(entry.name), entry.is_dir))
         .collect())
 }
 

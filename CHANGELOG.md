@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-28
+
+### Added
+
+- `msg_load_folder_manifest`, a std-only crate in this repository that owns
+  the `dir.manifest` format: the public `DIR_MANIFEST_FILE` name,
+  `write_dir_manifests` (writes a manifest into a directory and every
+  directory beneath it) and `parse_manifest` (what the folder scanner reads
+  manifests with). Re-exported as `msg_load_folder::manifest`. Build scripts
+  and packaging tools depend on it directly to generate manifests for a
+  staged web bundle without compiling Bevy.
+
+## [0.6.1] - 2026-09-14
+
 ### Changed
 
 - The initial-load-complete log line now names the asset type and file
@@ -151,6 +165,9 @@ Upgrade to **Bevy 0.19**.
 
 - Initial release with Bevy 0.16 support.
 
+[Unreleased]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/MolecularSadism/msg_load_folder/compare/v0.3.1...v0.4.0
