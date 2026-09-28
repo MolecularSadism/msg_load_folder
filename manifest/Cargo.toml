@@ -1,0 +1,17 @@
+[package]
+name = "msg_load_folder_manifest"
+version = "0.7.0"
+edition = "2024"
+authors = ["ffmulks <63452434+ffmulks@users.noreply.github.com>"]
+description = "The dir.manifest format msg_load_folder reads on asset readers that cannot list directories"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/MolecularSadism/msg_load_folder"
+keywords = ["bevy", "gamedev", "assets", "wasm"]
+categories = ["game-development", "filesystem"]
+
+# Deliberately std-only, with no dependencies: build scripts and packaging
+# tools generate manifests with it without compiling Bevy.
+[dependencies]
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

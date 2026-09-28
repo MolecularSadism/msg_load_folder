@@ -3406,14 +3406,19 @@ dependencies = [
 
 [[package]]
 name = "msg_load_folder"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bevy 0.18.1",
  "bevy 0.19.0",
  "bevy_common_assets 0.15.0",
  "bevy_common_assets 0.17.0",
+ "msg_load_folder_manifest",
  "serde",
 ]
+
+[[package]]
+name = "msg_load_folder_manifest"
+version = "0.7.0"
 
 [[package]]
 name = "naga"

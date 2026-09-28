@@ -135,8 +135,24 @@ fireball.spell.ron
 ice_bolt.spell.ron
 ```
 
-Native builds ignore the manifest entirely; generating it for a web build is
-the consuming project's job.
+Native builds ignore the manifest entirely. Generate the manifests into the
+staged web bundle's asset directory (not the source tree) with
+`msg_load_folder::manifest::write_dir_manifests`, which writes exactly the
+format the scanner reads:
+
+```rust,no_run
+msg_load_folder::manifest::write_dir_manifests("dist/assets".as_ref())
+    .expect("write dir.manifest files");
+```
+
+The manifest code lives in the std-only `msg_load_folder_manifest` crate in
+this repository, so a build script or packaging tool can depend on it directly
+without compiling Bevy:
+
+```toml
+[dependencies]
+msg_load_folder_manifest = { git = "https://github.com/MolecularSadism/msg_load_folder", tag = "v0.7.0" }
+```
 
 ## Resilience & Hot Reloading
 
