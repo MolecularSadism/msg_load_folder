@@ -135,14 +135,18 @@ fireball.spell.ron
 ice_bolt.spell.ron
 ```
 
-Native builds ignore the manifest entirely. Generate the manifests into the
-staged web bundle's asset directory (not the source tree) with
-`msg_load_folder::manifest::write_dir_manifests`, which writes exactly the
-format the scanner reads:
+The fallback is opt-in: enable the `dir_manifest` feature for web builds.
+Without it the scanner only lists directories natively and never looks for a
+manifest. Generate the manifests into the staged web bundle's asset directory
+(not the source tree) with `msg_load_folder::manifest::write_dir_manifests`,
+which writes exactly the format the scanner reads:
 
 ```rust,no_run
+# #[cfg(feature = "dir_manifest")]
+# fn stage() {
 msg_load_folder::manifest::write_dir_manifests("dist/assets".as_ref())
     .expect("write dir.manifest files");
+# }
 ```
 
 The manifest code lives in the std-only `msg_load_folder_manifest` crate in

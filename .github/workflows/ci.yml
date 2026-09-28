@@ -47,8 +47,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
       - name: Clippy
         run: cargo clippy --workspace --all-targets ${{ matrix.flags }} -- -D warnings
+      - name: Clippy (dir_manifest)
+        run: cargo clippy --workspace --all-targets ${{ matrix.flags }} --features dir_manifest -- -D warnings
       - name: Test
         run: cargo test --workspace ${{ matrix.flags }}
+      - name: Test (dir_manifest)
+        run: cargo test --workspace ${{ matrix.flags }} --features dir_manifest
       # The manifest crate is std-only by contract: fail if it ever gains a dependency.
       - name: Manifest crate has no dependencies
         run: test "$(cargo tree -p msg_load_folder_manifest --edges normal --prefix none | wc -l)" -eq 1
