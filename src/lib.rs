@@ -45,6 +45,7 @@ pub extern crate bevy;
 /// readers that cannot list directories, with the writer a web build's
 /// packaging step generates it with. Std-only: tools that must not compile
 /// Bevy depend on `msg_load_folder_manifest` directly.
+#[cfg(feature = "dir_manifest")]
 pub use msg_load_folder_manifest as manifest;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -52,7 +53,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use bevy::asset::io::{AssetReaderError, ErasedAssetReader, Reader};
+use bevy::asset::io::{AssetReaderError, ErasedAssetReader};
 use bevy::asset::{
     AssetLoadFailedEvent, AssetPath, LoadState, LoadedFolder, RecursiveDependencyLoadState,
     UntypedHandle,
@@ -701,6 +702,22 @@ async fn scan_directory(
     }
 }
 
+/// Lists `path`'s immediate children as `(child_path, is_directory)` pairs
+/// through native [`ErasedAssetReader::read_directory`].
+#[cfg(not(feature = "dir_manifest"))]
+async fn list_children(
+    reader: &dyn ErasedAssetReader,
+    path: &Path,
+) -> Result<Vec<(PathBuf, bool)>, AssetReaderError> {
+    let mut entries = reader.read_directory(path).await?;
+    let mut children = Vec::new();
+    while let Some(child) = entries.next().await {
+        let is_dir = reader.is_directory(&child).await.unwrap_or(false);
+        children.push((child, is_dir));
+    }
+    Ok(children)
+}
+
 /// Lists `path`'s immediate children as `(child_path, is_directory)` pairs.
 ///
 /// Prefers native [`ErasedAssetReader::read_directory`]. Falls back to
@@ -709,6 +726,7 @@ async fn scan_directory(
 /// e.g. web/HTTP) and one that errors outright. A missing manifest is only
 /// an error when native listing didn't work either; otherwise it just means
 /// the folder is empty.
+#[cfg(feature = "dir_manifest")]
 async fn list_children(
     reader: &dyn ErasedAssetReader,
     path: &Path,
@@ -736,12 +754,13 @@ async fn list_children(
 
 /// Reads and parses the [`manifest::DIR_MANIFEST_FILE`] at `path`, which a
 /// web build's packaging step writes with [`manifest::write_dir_manifests`].
+#[cfg(feature = "dir_manifest")]
 async fn read_manifest(
     reader: &dyn ErasedAssetReader,
     path: &Path,
 ) -> Result<Vec<(PathBuf, bool)>, AssetReaderError> {
     let manifest_path = path.join(manifest::DIR_MANIFEST_FILE);
-    let mut file: Box<dyn Reader> = reader.read(&manifest_path).await?;
+    let mut file: Box<dyn bevy::asset::io::Reader> = reader.read(&manifest_path).await?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .await

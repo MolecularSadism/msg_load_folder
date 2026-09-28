@@ -9,15 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0] - 2026-09-28
 
+### Changed
+
+- **Breaking:** the `dir.manifest` fallback is now behind the opt-in
+  `dir_manifest` feature. Without it folder scanning lists directories
+  natively only and never reads a manifest; web builds enable the feature.
+
 ### Added
 
 - `msg_load_folder_manifest`, a std-only crate in this repository that owns
   the `dir.manifest` format: the public `DIR_MANIFEST_FILE` name,
   `write_dir_manifests` (writes a manifest into a directory and every
   directory beneath it) and `parse_manifest` (what the folder scanner reads
-  manifests with). Re-exported as `msg_load_folder::manifest`. Build scripts
-  and packaging tools depend on it directly to generate manifests for a
-  staged web bundle without compiling Bevy.
+  manifests with). Re-exported as `msg_load_folder::manifest` with the
+  `dir_manifest` feature. Build scripts and packaging tools depend on it
+  directly to generate manifests for a staged web bundle without compiling
+  Bevy.
 
 ## [0.6.1] - 2026-09-14
 

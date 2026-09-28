@@ -27,7 +27,7 @@ readme = "README.md"
 members = [".", "manifest"]
 
 [dependencies]
-msg_load_folder_manifest = { path = "manifest", version = "0.7.0" }
+msg_load_folder_manifest = { path = "manifest", version = "0.7.0", optional = true }
 bevy = { version = "0.19", optional = true, default-features = false, features = [
     "bevy_asset",
     "bevy_log",
@@ -71,6 +71,10 @@ bevy_0_18 = ["dep:bevy018", "dep:bevy_common_assets018"]
 # runtime by the (ignored) end-to-end test in `tests/file_watcher.rs`; games
 # usually enable Bevy's `file_watcher` feature themselves instead.
 file_watcher = ["bevy?/file_watcher", "bevy018?/file_watcher"]
+# Folder scanning falls back to `dir.manifest` files on asset readers that
+# cannot list directories (Bevy's web/wasm reader), and `manifest` re-exports
+# the format's writer. Only web builds need it.
+dir_manifest = ["dep:msg_load_folder_manifest"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
@@ -84,3 +88,7 @@ type_complexity = "allow"
 # Bevy systems must take `Res`/`ResMut` params by value; taking them by
 # reference is not possible, so this pedantic lint is a false positive here.
 needless_pass_by_value = "allow"
+
+[[test]]
+name = "manifest_fallback"
+required-features = ["dir_manifest"]
