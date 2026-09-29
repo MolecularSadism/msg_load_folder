@@ -307,12 +307,8 @@ fn folder_loader_plugin_uses_external_watch_not_seen() {
     ));
 
     assert!(
-        run_until(&mut app, 500, |app| {
-            app.world()
-                .resource::<AssetFolderHandle<ThingId, Thing>>()
-                .is_loaded()
-        }),
-        "the loader should finish its own scan"
+        run_until(&mut app, 500, all_ready),
+        "the loader should finish its own scan and file loads"
     );
     let gate = app.world().resource::<LoadedFolders>();
     assert_eq!(
@@ -323,13 +319,74 @@ fn folder_loader_plugin_uses_external_watch_not_seen() {
     assert_eq!(
         gate.external_ready_count(),
         1,
-        "the external source must be marked ready once the loader's own scan completes"
+        "the external source must be marked ready once the loader's scan and file loads complete"
     );
     assert_eq!(
         gate.seen_count(),
         0,
         "the loader must not also register via the AssetId<LoadedFolder>-based path"
     );
+}
+
+/// `FolderLoaderPlugin` must hold the gate closed until every file its scan
+/// registered has finished loading, not merely until the scan has issued the
+/// per-file loads: a consumer that reads `Assets<A>` once the gate opens must
+/// find every registered asset there (or know it failed).
+#[test]
+fn folder_loader_gate_waits_for_every_registered_asset_to_load() {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+    struct NamedId(u64);
+    impl From<String> for NamedId {
+        fn from(s: String) -> Self {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            s.hash(&mut hasher);
+            NamedId(hasher.finish())
+        }
+    }
+
+    let root = unique_asset_root();
+    for i in 0..40 {
+        write(
+            &root,
+            &format!("things/file_{i}.thing.ron"),
+            &format!("(value: {i})"),
+        );
+    }
+    write(&root, "things/broken.thing.ron", "this is { not valid ron");
+    let mut app = build_app(&root);
+    app.add_plugins(FolderLoaderPlugin::<NamedId, Thing>::new(
+        "things",
+        ".thing.ron",
+    ));
+
+    for _ in 0..500 {
+        app.update();
+        if all_ready(&app) {
+            let world = app.world();
+            let server = world.resource::<AssetServer>();
+            let assets = world.resource::<Assets<Thing>>();
+            let library = world.resource::<AssetFolder<NamedId, Thing>>();
+            assert_eq!(
+                library.len(),
+                41,
+                "the scan must have registered every file"
+            );
+            for (id, handle) in library.iter() {
+                assert!(
+                    assets.contains(handle.id())
+                        || matches!(
+                            server.load_state(handle.id()),
+                            bevy::asset::LoadState::Failed(_)
+                        ),
+                    "gate opened while {id:?} was neither loaded nor failed"
+                );
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("the loader's folder never opened the gate");
 }
 
 /// Direct API coverage for [`LoadedFolders::watch_external`]: the gate holds

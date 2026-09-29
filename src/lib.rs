@@ -247,8 +247,8 @@ pub struct AssetFolderHandle<Id: Send + Sync + 'static, A: Send + Sync + 'static
     /// Whether the folder has been scanned and its assets registered at least once.
     initial_load_complete: bool,
     /// Readiness-gate token from [`LoadedFolders::watch_external`], reported
-    /// via [`LoadedFolders::mark_external_ready`] once `initial_load_complete`
-    /// flips true.
+    /// via [`LoadedFolders::mark_external_ready`] once the initial scan is
+    /// done and every asset it registered has finished loading or failed.
     #[reflect(ignore)]
     external_watch: Option<ExternalWatchId>,
     #[reflect(ignore)]
@@ -275,6 +275,9 @@ impl<Id: Send + Sync + 'static, A: Send + Sync + 'static> AssetFolderHandle<Id, 
 
     /// Returns `true` once the folder has been scanned and its assets
     /// registered at least once.
+    ///
+    /// Registered assets may still be loading. The [`LoadedFolders`] gate
+    /// additionally waits for every registered asset to finish loading or fail.
     ///
     /// Note that the library keeps reacting to changes after this returns
     /// `true`: files that are edited, added or removed are picked up on the
@@ -305,6 +308,9 @@ where
     rescan_requested: bool,
     /// The in-flight directory scan, if one is running.
     scan_task: Option<Task<Vec<PathBuf>>>,
+    /// Whether the initial scan has registered its assets but some of their
+    /// loads have not finished (loaded or failed) yet.
+    awaiting_initial_loads: bool,
     _marker: PhantomData<(Id, A)>,
 }
 
@@ -318,6 +324,7 @@ where
             initialized: false,
             rescan_requested: false,
             scan_task: None,
+            awaiting_initial_loads: false,
             _marker: PhantomData,
         }
     }
@@ -562,6 +569,10 @@ where
 /// 3. Spawns an asynchronous directory scan when one is requested.
 /// 4. Applies finished scans: newly seen files are loaded and registered,
 ///    files that disappeared are dropped.
+/// 5. After the initial scan, waits until every registered asset has finished
+///    loading (with its dependencies) or failed, then reports the folder
+///    ready to the gate. A registered handle alone does not mean the asset is
+///    in `Assets<A>` yet.
 ///
 /// Edits to the *contents* of an already-registered file are handled
 /// automatically by Bevy: the handle is stable, so the asset behind it is
@@ -631,17 +642,36 @@ fn load_assets_from_folder<Id, A>(
         apply_scan_results(&asset_server, &config, &mut library, paths);
         if !folder_handle.initial_load_complete {
             folder_handle.initial_load_complete = true;
-            if let (Some(gate), Some(token)) = (gate.as_mut(), folder_handle.external_watch) {
-                gate.mark_external_ready(token);
-            }
-            info!(
-                "Loaded {} {} asset(s) from folder '{}' ({:?})",
-                library.len(),
-                std::any::type_name::<A>(),
-                config.folder_path,
-                config.file_extensions,
-            );
+            scan_state.awaiting_initial_loads = true;
         }
+    }
+
+    // 5. Open the gate once every asset the initial scan registered has settled.
+    if scan_state.awaiting_initial_loads
+        && library
+            .iter()
+            .all(|(_, handle)| asset_settled(&asset_server, handle.id()))
+    {
+        scan_state.awaiting_initial_loads = false;
+        if let (Some(gate), Some(token)) = (gate.as_mut(), folder_handle.external_watch) {
+            gate.mark_external_ready(token);
+        }
+        info!(
+            "Loaded {} {} asset(s) from folder '{}' ({:?})",
+            library.len(),
+            std::any::type_name::<A>(),
+            config.folder_path,
+            config.file_extensions,
+        );
+    }
+}
+
+/// Whether a registered asset has finished loading: loaded with all of its
+/// dependencies, failed (itself or a dependency), or no longer tracked.
+fn asset_settled<A: Asset>(asset_server: &AssetServer, id: AssetId<A>) -> bool {
+    match asset_server.get_recursive_dependency_load_state(id) {
+        None | Some(RecursiveDependencyLoadState::Failed(_)) => true,
+        Some(_) => asset_server.is_loaded_with_dependencies(id),
     }
 }
 
@@ -870,8 +900,8 @@ fn filename_has_extension(path: &Path, file_extensions: &[&str]) -> bool {
 /// Every [`FolderLoaderPlugin`] registers its folder with the gate
 /// automatically when this plugin is present, in all builds — with or without
 /// asset watching — via [`LoadedFolders::watch_external`], gated on the
-/// loader's own scan-completion rather than the folder's recursive dependency
-/// state.
+/// loader's own scan completing and every file it registered finishing its
+/// load (or failing), rather than the folder's recursive dependency state.
 ///
 /// Idempotent: the plugin may be added from several places (it is not unique),
 /// and only the first add registers the resource and system.
