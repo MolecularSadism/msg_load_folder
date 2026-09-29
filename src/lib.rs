@@ -118,6 +118,7 @@ where
 {
     folder_path: &'static str,
     file_extensions: Vec<&'static str>,
+    wait_for_loads: bool,
     _marker: PhantomData<(Id, A)>,
 }
 
@@ -139,6 +140,7 @@ where
         Self {
             folder_path,
             file_extensions: vec![file_extension],
+            wait_for_loads: true,
             _marker: PhantomData,
         }
     }
@@ -171,6 +173,18 @@ where
         self.file_extensions.push(extension);
         self
     }
+
+    /// Reports the folder ready to the [`LoadedFolders`] gate as soon as its
+    /// initial scan has registered the files, without waiting for their loads.
+    ///
+    /// For an app in which this folder's assets can never finish loading, such
+    /// as audio samples whose loader is only registered by an audio stream the
+    /// app never starts.
+    #[must_use]
+    pub fn ready_after_scan(mut self) -> Self {
+        self.wait_for_loads = false;
+        self
+    }
 }
 
 impl<Id, A> Plugin for FolderLoaderPlugin<Id, A>
@@ -183,6 +197,7 @@ where
         app.insert_resource(FolderLoaderConfig::<Id, A> {
             folder_path: self.folder_path,
             file_extensions: self.file_extensions.clone(),
+            wait_for_loads: self.wait_for_loads,
             _marker: PhantomData,
         });
 
@@ -222,6 +237,8 @@ where
 {
     folder_path: &'static str,
     file_extensions: Vec<&'static str>,
+    /// Whether the gate waits for the registered files' loads, not only the scan.
+    wait_for_loads: bool,
     _marker: PhantomData<(Id, A)>,
 }
 
@@ -571,7 +588,8 @@ where
 ///    files that disappeared are dropped.
 /// 5. After the initial scan, waits until every registered asset has finished
 ///    loading (with its dependencies) or failed, then reports the folder
-///    ready to the gate. A registered handle alone does not mean the asset is
+///    ready to the gate; with [`FolderLoaderPlugin::ready_after_scan`] it
+///    reports it right after the scan. A registered handle alone does not mean the asset is
 ///    in `Assets<A>` yet.
 ///
 /// Edits to the *contents* of an already-registered file are handled
@@ -648,9 +666,10 @@ fn load_assets_from_folder<Id, A>(
 
     // 5. Open the gate once every asset the initial scan registered has settled.
     if scan_state.awaiting_initial_loads
-        && library
-            .iter()
-            .all(|(_, handle)| asset_settled(&asset_server, handle.id()))
+        && (!config.wait_for_loads
+            || library
+                .iter()
+                .all(|(_, handle)| asset_settled(&asset_server, handle.id())))
     {
         scan_state.awaiting_initial_loads = false;
         if let (Some(gate), Some(token)) = (gate.as_mut(), folder_handle.external_watch) {

@@ -389,6 +389,79 @@ fn folder_loader_gate_waits_for_every_registered_asset_to_load() {
     panic!("the loader's folder never opened the gate");
 }
 
+/// A loader that is only preregistered, never registered: every load of its
+/// extension stays pending, as audio samples do in an app that never starts
+/// the audio stream whose startup registers their loader.
+#[derive(TypePath)]
+struct NeverRegisteredLoader;
+
+impl bevy::asset::AssetLoader for NeverRegisteredLoader {
+    type Asset = Thing;
+    type Settings = ();
+    type Error = std::io::Error;
+
+    async fn load(
+        &self,
+        _reader: &mut dyn bevy::asset::io::Reader,
+        _settings: &Self::Settings,
+        _load_context: &mut bevy::asset::LoadContext<'_>,
+    ) -> Result<Self::Asset, Self::Error> {
+        Ok(Thing { value: 0 })
+    }
+
+    fn extensions(&self) -> &[&str] {
+        &["pending"]
+    }
+}
+
+/// Builds an app whose `pending/` folder holds files that never finish loading.
+fn pending_folder_app(plugin: FolderLoaderPlugin<ThingId, Thing>) -> App {
+    let root = unique_asset_root();
+    write(&root, "pending/alpha.pending", "");
+    write(&root, "pending/beta.pending", "");
+    let mut app = build_app(&root);
+    app.preregister_asset_loader::<NeverRegisteredLoader>(&["pending"]);
+    app.add_plugins(plugin);
+    app
+}
+
+/// A folder whose files never finish loading holds the gate closed.
+#[test]
+fn folder_loader_gate_stays_closed_while_its_files_are_pending() {
+    let mut app = pending_folder_app(FolderLoaderPlugin::new("pending", ".pending"));
+
+    assert!(
+        run_until(&mut app, 500, |app| {
+            app.world()
+                .resource::<AssetFolderHandle<ThingId, Thing>>()
+                .is_loaded()
+        }),
+        "the scan must register the files"
+    );
+    assert!(
+        !run_until(&mut app, 50, all_ready),
+        "the gate opened while the folder's files were still pending"
+    );
+}
+
+/// With `ready_after_scan`, the same folder opens the gate once its scan has
+/// registered the files.
+#[test]
+fn ready_after_scan_opens_the_gate_while_files_are_pending() {
+    let mut app =
+        pending_folder_app(FolderLoaderPlugin::new("pending", ".pending").ready_after_scan());
+
+    assert!(
+        run_until(&mut app, 500, all_ready),
+        "the gate never opened after the scan"
+    );
+    assert_eq!(
+        app.world().resource::<AssetFolder<ThingId, Thing>>().len(),
+        2,
+        "the scan must have registered both files"
+    );
+}
+
 /// Direct API coverage for [`LoadedFolders::watch_external`]: the gate holds
 /// closed from registration until the matching
 /// [`LoadedFolders::mark_external_ready`], independent of any
