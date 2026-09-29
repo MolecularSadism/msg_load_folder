@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-29
+
+### Fixed
+
+- A `FolderLoaderPlugin` folder now holds the `LoadedFolders` gate closed
+  until every file its initial scan registered has finished loading (with
+  its dependencies) or failed. Previously the gate opened as soon as the scan
+  had issued the per-file loads, so a consumer reading `Assets<A>` right
+  after the gate opened could find some registered assets missing. The
+  "Loaded N asset(s) from folder" log line moves to that same point.
+  `AssetFolderHandle::is_loaded` is unchanged: it still reports that the
+  scan registered the files.
+
 ## [0.7.0] - 2026-09-28
 
 ### Changed
