@@ -349,7 +349,9 @@ Resource containing loaded assets indexed by ID.
 # let mut library: AssetFolder<SpellId, Spell> = AssetFolder::new();
 # let spell_id = SpellId(1);
 # library.insert(spell_id, Handle::default());
-// Inside a system you'd take `library: Res<AssetFolder<SpellId, Spell>>`.
+# let spell_assets = Assets::<Spell>::default();
+// Inside a system you'd take `library: Res<AssetFolder<SpellId, Spell>>`
+// and `spell_assets: Res<Assets<Spell>>`.
 
 // Get by ID
 if let Some(handle) = library.get(spell_id) {
@@ -364,6 +366,16 @@ if library.contains(spell_id) {
 // Iterate all
 for (id, handle) in library.iter() {
     let _ = (id, handle);
+}
+
+// Resolve straight to loaded data (`None` while unknown or still loading)
+if let Some(spell) = library.resolve(spell_id, &spell_assets) {
+    let _ = spell;
+}
+
+// Iterate every loaded asset
+for (id, spell) in library.iter_loaded(&spell_assets) {
+    let _ = (id, spell);
 }
 
 // Check loading state

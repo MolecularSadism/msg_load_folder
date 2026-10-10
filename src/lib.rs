@@ -454,6 +454,19 @@ where
         self.assets.iter().map(|(id, h)| (*id, h))
     }
 
+    /// The loaded asset filed under `id`, or `None` when the id is unknown or
+    /// its asset has not loaded.
+    #[must_use]
+    pub fn resolve<'a>(&self, id: Id, assets: &'a Assets<A>) -> Option<&'a A> {
+        self.get(id).and_then(|handle| assets.get(handle))
+    }
+
+    /// Every id whose asset has loaded, paired with that asset.
+    pub fn iter_loaded<'a>(&'a self, assets: &'a Assets<A>) -> impl Iterator<Item = (Id, &'a A)> {
+        self.iter()
+            .filter_map(|(id, handle)| assets.get(handle).map(|asset| (id, asset)))
+    }
+
     /// Returns a mutable iterator over all IDs and their handles.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Id, &mut Handle<A>)> + '_ {
         self.assets.iter_mut().map(|(id, h)| (*id, h))
@@ -1474,6 +1487,24 @@ mod tests {
         fn from(s: String) -> Self {
             MockId(s.len() as u64)
         }
+    }
+
+    #[derive(Asset, TypePath, Clone, Debug, PartialEq)]
+    struct Prefab(u32);
+
+    #[test]
+    fn resolves_only_loaded_assets() {
+        let mut assets = Assets::<Prefab>::default();
+        let mut folder = AssetFolder::<u64, Prefab>::new();
+        folder.insert(1, assets.add(Prefab(10)));
+        folder.insert(2, Handle::default());
+
+        assert_eq!(folder.resolve(1, &assets), Some(&Prefab(10)));
+        assert_eq!(folder.resolve(2, &assets), None);
+        assert_eq!(folder.resolve(3, &assets), None);
+
+        let loaded: Vec<_> = folder.iter_loaded(&assets).collect();
+        assert_eq!(loaded, vec![(1, &Prefab(10))]);
     }
 
     #[test]
